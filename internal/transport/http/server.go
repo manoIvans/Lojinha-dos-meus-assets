@@ -24,18 +24,28 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager) *gin.Engine {
 	userRepo := postgres.NewUserRepository(db)
 	authHandler := handler.NewAuthHandler(userRepo, tm)
 
+	assetRepo := postgres.NewAssetRepository(db)
+	assetHandler := handler.NewAssetHandler(assetRepo)
+
 	api := r.Group("/api/v1")
 	{
 		api.POST("/register", authHandler.Register)
 		api.POST("/login", authHandler.Login)
 
+		// Catálogo de assets é público — qualquer um pode listar e
+		// ver detalhes. Mantemos FORA do grupo protegido de propósito.
+		api.GET("/assets", assetHandler.List)
+		api.GET("/assets/:id", assetHandler.GetByID)
+
 		// Rotas protegidas: tudo dentro deste grupo exige um JWT
-		// válido. Conforme novos recursos forem nascendo (assets,
-		// tags), adicione-os aqui.
+		// válido. O middleware popula o userID no contexto, que os
+		// handlers leem para saber quem é o autor da request.
 		protected := api.Group("")
 		protected.Use(middleware.RequireAuth(tm))
 		{
-			// protected.GET("/me", ...)
+			protected.POST("/assets", assetHandler.Create)
+			protected.PUT("/assets/:id", assetHandler.Update)
+			protected.DELETE("/assets/:id", assetHandler.Delete)
 		}
 	}
 
