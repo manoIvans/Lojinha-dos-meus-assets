@@ -1,0 +1,1 @@
+# Lojinha-dos-meus-assets
