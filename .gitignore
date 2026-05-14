@@ -1,0 +1,24 @@
+# Variáveis de ambiente — segredos reais
+.env
+
+# Binários
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Output de testes
+*.test
+*.out
+coverage.*
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
