@@ -77,13 +77,20 @@ export default function Layout() {
             </NavLink>
           )}
 
-          {/* Ação de auth alinhada à direita. Ícone ▶ só aqui, para
-              destacar como ação principal (não navegação interna). */}
+          {/* Ação de auth alinhada à direita. Estilizada como pílula
+              bordada (border-2 em parchment) que inverte cores no
+              hover — destaca a ação principal sem ficar pesada como
+              um botão pixel completo (que dominaria a navbar). */}
           <div className="ml-auto">
             {isAuthenticated ? (
               <button
                 onClick={handleLogout}
-                className="px-3 py-1 text-xs uppercase tracking-widest font-bold border-2 border-transparent text-parchment transition-colors duration-75 hover:bg-ink/30"
+                className="
+                  inline-block px-3 py-1.5 text-xs uppercase tracking-widest font-bold
+                  border-2 border-parchment text-parchment
+                  transition-colors duration-75
+                  hover:bg-parchment hover:text-arcane
+                "
               >
                 ▶ Sair
               </button>
@@ -91,10 +98,10 @@ export default function Layout() {
               <NavLink
                 to="/login"
                 className={({ isActive }) =>
-                  `inline-block px-3 py-1 text-xs uppercase tracking-widest font-bold border-2 transition-colors duration-75 ${
+                  `inline-block px-3 py-1.5 text-xs uppercase tracking-widest font-bold border-2 transition-colors duration-75 ${
                     isActive
-                      ? 'bg-parchment text-ink border-ink'
-                      : 'border-transparent text-parchment hover:bg-ink/30'
+                      ? 'bg-parchment text-arcane border-parchment'
+                      : 'border-parchment text-parchment hover:bg-parchment hover:text-arcane'
                   }`
                 }
               >

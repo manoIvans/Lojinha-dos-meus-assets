@@ -1,0 +1,95 @@
+# Compose v2 (sem campo `version:` no topo — não é mais necessário).
+# Sobe dois serviços: Postgres e a API Go. Comunicação interna pela
+# rede default do compose; hostname de cada serviço = nome do serviço.
+
+services:
+  # ============================================================
+  # Postgres: banco de dados persistente
+  # ============================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: lojinha-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-lojinha_assets}
+    volumes:
+      # VOLUME NOMEADO para os dados. Sobrevive a `docker compose down`.
+      # Pra resetar do ZERO (apaga tudo): `docker compose down -v`.
+      # Inspeção: `docker volume inspect lojinha-dos-meus-assets_postgres_data`
+      - postgres_data:/var/lib/postgresql/data
+
+      # BIND MOUNT read-only das migrations no diretório de init scripts
+      # do Postgres oficial. Todos os .sql aqui rodam em ordem alfabética
+      # APENAS na PRIMEIRA inicialização do volume (quando o data dir
+      # está vazio). Mudanças de schema POSTERIORES não são reaplicadas
+      # — você precisa rodá-las manualmente ou trocar para um migrator.
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    ports:
+      # Expõe 5432 no host pra facilitar conectar com psql/pgAdmin
+      # local durante dev. Em produção, REMOVER esta linha — o banco
+      # só precisa ser visível pra outros serviços da rede do compose.
+      - "5432:5432"
+    healthcheck:
+      # pg_isready é o jeito canônico de saber se o Postgres tá pronto
+      # pra aceitar conexões. Sem isso, a API pode iniciar antes do DB
+      # estar acessível e crashar.
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-lojinha_assets}"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  # ============================================================
+  # API Go: build local via Dockerfile multi-stage
+  # ============================================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lojinha-api
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_PORT: "8080"
+
+      # ATENÇÃO: host = "postgres" (nome do serviço), NÃO "localhost".
+      # Dentro do container API, localhost aponta pro próprio container,
+      # não pro DB. A rede default do compose resolve nomes de serviço
+      # automaticamente.
+      DATABASE_URL: "postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-lojinha_assets}?sslmode=disable"
+
+      # JWT_SECRET é obrigatório — :? faz o compose ABORTAR com erro
+      # claro se a variável estiver vazia, em vez de subir com segredo
+      # default e te dar um false sense of security.
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET precisa estar definido no .env}
+      JWT_TTL_HOURS: ${JWT_TTL_HOURS:-24}
+
+      # Caminho INTERNO do container onde o LocalStorage grava. Mapeado
+      # pra ./uploads do host via volume abaixo.
+      UPLOAD_DIR: /app/uploads
+
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+    volumes:
+      # BIND MOUNT da pasta uploads/ local — diferente do banco que
+      # usa volume nomeado, aqui escolhemos bind porque você quer ver
+      # e gerenciar os arquivos .glb/.png direto no filesystem do host
+      # (ex: backup, inspeção, mover entre máquinas).
+      - ./uploads:/app/uploads
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        # condition: service_healthy bloqueia a API até o pg_isready
+        # passar. Sem isso, ela poderia subir antes do Postgres aceitar
+        # conexões e morrer no NewPool().
+        condition: service_healthy
+    restart: unless-stopped
+
+# ============================================================
+# Volumes nomeados (geridos pelo Docker, fora do filesystem do projeto)
+# ============================================================
+volumes:
+  postgres_data:

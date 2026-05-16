@@ -1,0 +1,53 @@
+# Tudo que NÃO precisa entrar no contexto de build da API Go.
+# Reduz tempo de `docker build` e protege contra vazar segredos
+# locais pra dentro de uma imagem.
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Build artifacts Go
+*.test
+*.out
+*.exe
+bin/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE / agente
+.vscode/
+.idea/
+.claude/
+
+# Docker files (não se incluem no contexto que copiam)
+.dockerignore
+Dockerfile
+docker-compose*.yml
+
+# Frontend — não é parte do binário Go. Quando virar deploy
+# completo, ele vai na sua própria imagem ou num build separado.
+frontend/
+
+# Env files — sempre passados via `environment:` no compose, NUNCA
+# embarcados na imagem (vazariam JWT_SECRET e outros).
+.env
+.env.*
+!.env.example
+
+# Caches TS
+*.tsbuildinfo
+
+# Uploads — vêm via volume bind no runtime, não na imagem.
+# Embarcar arquivos de usuário na imagem é antipattern (imagens são
+# imutáveis; dados não).
+uploads/
+
+# Mem do agente e scripts de teste/dev
+memory/
+scripts/
+
+# Logs
+*.log

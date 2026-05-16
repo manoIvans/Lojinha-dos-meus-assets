@@ -26,3 +26,9 @@ Thumbs.db
 # Arquivos de upload (thumbnails e modelos 3D) — conteúdo de runtime,
 # não pertence ao repo. A estrutura é recriada pelo LocalStorage no boot.
 /uploads/
+
+# Dumps do Postgres — contém dados de usuário (emails, hashes).
+# Migrations versionadas continuam em /migrations/*.sql (não cobertas).
+/backup*.sql
+/dump*.sql
+*.pgdump

@@ -57,18 +57,33 @@ func (r *AssetRepository) Create(ctx context.Context, ownerID int64, title, desc
 	return a, nil
 }
 
-// FindByID retorna um único asset. ErrAssetNotFound se o ID não
-// existe — o handler converte para 404.
+// FindByID retorna um único asset com o nome do autor já populado
+// via JOIN. ErrAssetNotFound se o ID não existe — o handler converte
+// para 404. Mesma estratégia do List: JOIN inner porque a FK tem ON
+// DELETE CASCADE (não existe asset órfão).
 func (r *AssetRepository) FindByID(ctx context.Context, id int64) (*domain.Asset, error) {
-	const q = `SELECT ` + assetColumns + ` FROM assets WHERE id = $1`
+	const q = `
+		SELECT a.id, a.owner_id, a.title, a.description, a.category,
+		       a.price_cents, a.thumbnail_path, a.model_path,
+		       a.created_at, a.updated_at, u.email
+		  FROM assets a
+		  JOIN users u ON u.id = a.owner_id
+		 WHERE a.id = $1`
 
 	a := &domain.Asset{}
-	if err := scanAsset(r.db.QueryRow(ctx, q, id), a); err != nil {
+	var email string
+	err := r.db.QueryRow(ctx, q, id).Scan(
+		&a.ID, &a.OwnerID, &a.Title, &a.Description, &a.Category,
+		&a.PriceCents, &a.ThumbnailPath, &a.ModelPath,
+		&a.CreatedAt, &a.UpdatedAt, &email,
+	)
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrAssetNotFound
 		}
 		return nil, fmt.Errorf("select asset by id: %w", err)
 	}
+	a.AuthorName = authorNameFromEmail(email)
 	return a, nil
 }
 
