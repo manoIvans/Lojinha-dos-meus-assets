@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -72,11 +73,21 @@ func (r *AssetRepository) FindByID(ctx context.Context, id int64) (*domain.Asset
 }
 
 // List devolve todos os assets ordenados do mais recente para o mais
-// antigo. Sem paginação por enquanto — quando o catálogo crescer,
-// trocar essa assinatura por (limit, offset) ou cursor é o primeiro
-// passo. Por ora, simples é melhor que pronto-para-tudo.
+// antigo, com o email do autor já incluído via JOIN. Sem paginação
+// por enquanto — quando o catálogo crescer, trocar essa assinatura
+// por (limit, offset) ou cursor é o primeiro passo.
+//
+// O JOIN é INNER porque a FK assets.owner_id -> users(id) tem ON
+// DELETE CASCADE: se o user some, os assets dele somem junto, então
+// nunca temos asset órfão para um LEFT JOIN proteger.
 func (r *AssetRepository) List(ctx context.Context) ([]*domain.Asset, error) {
-	const q = `SELECT ` + assetColumns + ` FROM assets ORDER BY created_at DESC`
+	const q = `
+		SELECT a.id, a.owner_id, a.title, a.description, a.category,
+		       a.price_cents, a.thumbnail_path, a.model_path,
+		       a.created_at, a.updated_at, u.email
+		  FROM assets a
+		  JOIN users u ON u.id = a.owner_id
+		 ORDER BY a.created_at DESC`
 
 	rows, err := r.db.Query(ctx, q)
 	if err != nil {
@@ -90,15 +101,35 @@ func (r *AssetRepository) List(ctx context.Context) ([]*domain.Asset, error) {
 	assets := make([]*domain.Asset, 0)
 	for rows.Next() {
 		a := &domain.Asset{}
-		if err := scanAsset(rows, a); err != nil {
+		var email string
+		if err := rows.Scan(
+			&a.ID, &a.OwnerID, &a.Title, &a.Description, &a.Category,
+			&a.PriceCents, &a.ThumbnailPath, &a.ModelPath,
+			&a.CreatedAt, &a.UpdatedAt, &email,
+		); err != nil {
 			return nil, fmt.Errorf("scan asset row: %w", err)
 		}
+		a.AuthorName = authorNameFromEmail(email)
 		assets = append(assets, a)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate assets: %w", err)
 	}
 	return assets, nil
+}
+
+// authorNameFromEmail extrai a parte antes do @ para usar como nome
+// de exibição. Reduz vazamento de email completo no catálogo público
+// (alguém ainda pode adivinhar o domínio, mas pelo menos a galeria
+// não vira uma lista enumerável de contas).
+//
+// Quando o User ganhar um campo display_name próprio, troca-se isso
+// pelo campo dedicado e essa função some.
+func authorNameFromEmail(email string) string {
+	if i := strings.Index(email, "@"); i > 0 {
+		return email[:i]
+	}
+	return email
 }
 
 // Update aplica uma edição completa (PUT, não PATCH) e devolve o

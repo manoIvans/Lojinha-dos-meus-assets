@@ -56,7 +56,7 @@ func main() {
 	// precisam acomodar uploads grandes (.glb pode chegar a ~100 MiB).
 	// Por isso usamos ReadHeaderTimeout curto (protege contra slowloris
 	// no handshake) e ReadTimeout longo (cobre upload em conexão lenta).
-	router := httptransport.NewRouter(db, tokenManager, fileStorage)
+	router := httptransport.NewRouter(db, tokenManager, fileStorage, cfg.AllowedOrigins)
 	srv := &http.Server{
 		Addr:              httptransport.Addr(cfg.AppPort),
 		Handler:           router,

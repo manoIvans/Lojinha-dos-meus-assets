@@ -78,6 +78,13 @@ func NewLocalStorage(rootDir string) (*LocalStorage, error) {
 	return &LocalStorage{rootDir: rootDir}, nil
 }
 
+// RootDir devolve o diretório raiz do storage. Usado pelo router para
+// montar a rota estática /uploads — evita passar o mesmo path em dois
+// lugares (config + storage) só pra reaproveitar no servidor.
+func (s *LocalStorage) RootDir() string {
+	return s.rootDir
+}
+
 // SaveThumbnail persiste a imagem e devolve o caminho relativo (ex:
 // "thumbnails/9f2c....png") pronto para armazenar no banco.
 func (s *LocalStorage) SaveThumbnail(fh *multipart.FileHeader) (string, error) {

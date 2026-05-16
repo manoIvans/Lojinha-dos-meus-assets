@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -22,6 +23,10 @@ type Config struct {
 	// Caminho relativo ao CWD do processo (geralmente a raiz do projeto
 	// em dev, ou um volume montado em produção).
 	UploadDir string
+	// AllowedOrigins lista as origens permitidas pelo CORS. Tipicamente
+	// só o frontend (Vite em :5173 em dev). Múltiplas origens separadas
+	// por vírgula na env var.
+	AllowedOrigins []string
 }
 
 // Load lê o arquivo .env (se existir) e popula a struct Config.
@@ -42,12 +47,13 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		AppEnv:      getEnv("APP_ENV", "development"),
-		AppPort:     port,
-		DatabaseURL: os.Getenv("DATABASE_URL"),
-		JWTSecret:   os.Getenv("JWT_SECRET"),
-		JWTTTL:      time.Duration(ttlHours) * time.Hour,
-		UploadDir:   getEnv("UPLOAD_DIR", "uploads"),
+		AppEnv:         getEnv("APP_ENV", "development"),
+		AppPort:        port,
+		DatabaseURL:    os.Getenv("DATABASE_URL"),
+		JWTSecret:      os.Getenv("JWT_SECRET"),
+		JWTTTL:         time.Duration(ttlHours) * time.Hour,
+		UploadDir:      getEnv("UPLOAD_DIR", "uploads"),
+		AllowedOrigins: parseOrigins(getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173")),
 	}
 
 	// DATABASE_URL não tem default por design: rodar o servidor sem
@@ -70,4 +76,19 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// parseOrigins quebra uma string CSV de origens em slice, descartando
+// vazios. Não validamos a forma da URL aqui — uma origem mal escrita
+// simplesmente não vai bater com o Origin recebido e o CORS bloqueia,
+// que é o comportamento desejado em caso de erro de configuração.
+func parseOrigins(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

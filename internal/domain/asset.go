@@ -35,6 +35,11 @@ type Asset struct {
 	PriceCents    int64     `json:"price_cents"`
 	ThumbnailPath string    `json:"thumbnail_path"`
 	ModelPath     string    `json:"model_path"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	// AuthorName é populado APENAS no List (com JOIN em users) para a
+	// vitrine pública. omitempty mantém o JSON limpo nos endpoints que
+	// não fazem o JOIN (FindByID, Create, Update). Quando outro consumer
+	// precisar dele, basta repetir o JOIN no SELECT correspondente.
+	AuthorName string    `json:"author_name,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
