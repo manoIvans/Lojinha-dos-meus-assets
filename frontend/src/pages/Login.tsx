@@ -3,24 +3,33 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 
-// O backend tem dois endpoints:
+// Backend tem dois endpoints simétricos (ambos retornam {token}):
 //   POST /api/v1/login     → { token }
 //   POST /api/v1/register  → { user, token }
-//
-// Ambos retornam token, então o fluxo é idêntico do ponto de vista
-// do frontend. Um toggle local decide qual chamar — evita ter uma
-// rota separada /register que só duplica o formulário.
+// Toggle local decide qual chamar — uma rota /register dedicada só
+// duplicaria o formulário.
 type Mode = 'login' | 'register'
-
 type AuthResponse = { token: string }
+
+// Classes reutilizadas em todos os botões "principais": borda grossa,
+// sombra pixel, hover-press. Extraídas em const para evitar drift
+// quando ajustarmos a estética (ex: trocar offset da sombra).
+const PIXEL_BTN =
+  'border-4 border-ink shadow-pixel px-4 py-2 font-bold uppercase tracking-widest ' +
+  'transition-all duration-75 ease-out ' +
+  'hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none ' +
+  'disabled:opacity-50 disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-pixel'
+
+const PIXEL_INPUT =
+  'mt-1 block w-full bg-white text-ink border-4 border-ink px-3 py-2 ' +
+  'font-mono focus:outline-none focus:shadow-pixel-sm'
 
 export default function Login() {
   const { login } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
 
-  // Se o usuário foi mandado pra cá pelo ProtectedRoute, devolve ele
-  // ao destino original. Caso contrário, vai pro dashboard.
+  // Se veio do ProtectedRoute, volta para o destino original.
   const redirectTo =
     (location.state as { from?: { pathname: string } } | null)?.from?.pathname ??
     '/dashboard'
@@ -50,83 +59,98 @@ export default function Login() {
 
   return (
     <div className="mx-auto max-w-sm mt-12 p-6">
-      <h1 className="text-2xl font-semibold mb-6">
-        {mode === 'login' ? 'Entrar' : 'Criar conta'}
-      </h1>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <label className="block">
-          <span className="text-sm font-medium">Email</span>
-          <input
-            type="email"
-            required
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 focus:border-black focus:outline-none"
-          />
-        </label>
-        <label className="block">
-          <span className="text-sm font-medium">Senha</span>
-          <input
-            type="password"
-            required
-            minLength={8}
-            autoComplete={
-              mode === 'login' ? 'current-password' : 'new-password'
-            }
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 focus:border-black focus:outline-none"
-          />
-          {mode === 'register' && (
-            <span className="text-xs text-gray-500 mt-1 block">
-              Mínimo 8 caracteres.
+      <div className="bg-parchment border-4 border-ink shadow-pixel">
+        <h1 className="bg-arcane text-parchment text-sm font-bold uppercase tracking-widest border-b-4 border-ink px-4 py-3">
+          ▶ {mode === 'login' ? 'Entrar' : 'Criar Conta'}
+        </h1>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <label className="block">
+            <span className="text-xs font-bold uppercase tracking-wider">
+              Email
             </span>
+            <input
+              type="email"
+              required
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className={PIXEL_INPUT}
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-xs font-bold uppercase tracking-wider">
+              Senha
+            </span>
+            <input
+              type="password"
+              required
+              minLength={8}
+              autoComplete={
+                mode === 'login' ? 'current-password' : 'new-password'
+              }
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className={PIXEL_INPUT}
+            />
+            {mode === 'register' && (
+              <span className="text-[10px] uppercase tracking-wider mt-1 block">
+                Mínimo 8 caracteres
+              </span>
+            )}
+          </label>
+
+          {error && (
+            <div
+              role="alert"
+              className="bg-ink text-parchment border-4 border-ink shadow-pixel-sm p-3 text-xs font-bold uppercase tracking-wider"
+            >
+              ✗ {error}
+            </div>
           )}
-        </label>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+          <button
+            type="submit"
+            disabled={submitting}
+            className={`${PIXEL_BTN} w-full bg-arcane text-parchment text-sm`}
+          >
+            {submitting
+              ? '...'
+              : mode === 'login'
+                ? '▶ Entrar'
+                : '▶ Criar conta'}
+          </button>
+        </form>
 
-        <button
-          type="submit"
-          disabled={submitting}
-          className="w-full rounded bg-black text-white py-2 font-medium disabled:opacity-50"
-        >
-          {submitting
-            ? 'Enviando...'
-            : mode === 'login'
-              ? 'Entrar'
-              : 'Criar conta'}
-        </button>
-      </form>
-
-      <p className="mt-6 text-sm text-gray-600">
-        {mode === 'login' ? 'Ainda não tem conta?' : 'Já tem conta?'}{' '}
-        <button
-          type="button"
-          onClick={() => {
-            setMode(mode === 'login' ? 'register' : 'login')
-            setError(null)
-          }}
-          className="underline hover:text-black"
-        >
-          {mode === 'login' ? 'Criar agora' : 'Entrar'}
-        </button>
-      </p>
+        <div className="border-t-4 border-ink px-6 py-3 text-xs uppercase tracking-wider">
+          {mode === 'login' ? 'Sem conta?' : 'Já tem conta?'}{' '}
+          <button
+            type="button"
+            onClick={() => {
+              setMode(mode === 'login' ? 'register' : 'login')
+              setError(null)
+            }}
+            className="font-bold underline underline-offset-4 decoration-2 hover:text-arcane"
+          >
+            {mode === 'login' ? 'Criar agora' : 'Entrar'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
 
-// messageFor traduz o erro da API em algo legível. Mantemos perto da
-// página em vez de no client porque cada tela quer um wording próprio.
+// messageFor traduz erro da API em algo legível. Mantemos por página
+// porque cada tela quer um wording próprio.
 function messageFor(err: unknown, mode: Mode): string {
   if (err instanceof ApiError) {
-    if (mode === 'login' && err.status === 401) return 'Credenciais inválidas.'
+    if (mode === 'login' && err.status === 401) return 'Credenciais inválidas'
     if (mode === 'register' && err.status === 409) {
-      return 'Esse email já está cadastrado.'
+      return 'Email já cadastrado'
     }
     const body = err.body as { error?: string } | string
     if (typeof body === 'object' && body?.error) return body.error
   }
-  return 'Falha de rede. Tente novamente.'
+  return 'Falha de rede'
 }

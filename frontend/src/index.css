@@ -1,1 +1,54 @@
 @import "tailwindcss";
+
+/*
+ * Tema "Aventura Clássica" — paleta inspirada em pergaminho / RPG 8-16 bits.
+ *
+ * Cores nomeadas semanticamente (parchment/arcane/ink/twilight) para que mudar
+ * a paleta no futuro (ex: "tema masmorra noturna") seja só editar os
+ * valores aqui em vez de varrer todos os componentes.
+ *
+ * Em Tailwind v4, declarar `--color-X` dentro de @theme expõe X como
+ * utilitário: `bg-X`, `text-X`, `border-X`, com suporte a alpha (`text-ink/50`).
+ */
+@theme {
+  --color-parchment: #f4f4f4; /* superfícies (cards, janelas)       */
+  --color-twilight: #257179;  /* fundo da página — palco crepuscular*/
+  --color-arcane: #5d275d;    /* containers — roxo arcano (magia)   */
+  --color-ink: #1a1c2c;       /* texto e bordas — azul-escuro noite */
+
+  /*
+   * Sombras "pixel": offset sólido, zero blur. Combinam DOIS efeitos:
+   *   - inset 1px branco no topo-esquerdo → "highlight pixel" que dá
+   *     o look chunky/3D de sprites antigos (luz vindo do canto superior).
+   *   - outset offset escuro → a sombra projetada tradicional.
+   * shadow-pixel-sm é a versão compacta para inputs em focus.
+   */
+  --shadow-pixel: inset 1px 1px 0 0 rgba(255, 255, 255, 0.25),
+    4px 4px 0 0 var(--color-ink);
+  --shadow-pixel-sm: inset 1px 1px 0 0 rgba(255, 255, 255, 0.2),
+    2px 2px 0 0 var(--color-ink);
+
+  /*
+   * Fonte bitmap para títulos/logo. "Press Start 2P" replica o sistema
+   * do NES — só uppercase, glifos chunky 8x8. Carregada via Google Fonts
+   * no index.html. Fallback para monospace caso o font load falhe.
+   */
+  --font-pixel: "Press Start 2P", ui-monospace, monospace;
+}
+
+/*
+ * Textura "scanlines" do palco crepuscular: linhas horizontais a 4px
+ * de período com 4% de branco — quase imperceptíveis individualmente,
+ * mas dão profundidade CRT ao bg-twilight. Aplicada via classe própria
+ * (não @theme) porque é um padrão visual, não um token de cor.
+ */
+.bg-twilight-scan {
+  background-color: var(--color-twilight);
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent 0,
+    transparent 3px,
+    rgba(255, 255, 255, 0.04) 3px,
+    rgba(255, 255, 255, 0.04) 4px
+  );
+}

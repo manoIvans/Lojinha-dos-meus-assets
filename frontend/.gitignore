@@ -3,3 +3,5 @@ dist
 .env
 .env.local
 *.log
+# Cache do TypeScript incremental — regerado em cada build.
+*.tsbuildinfo
