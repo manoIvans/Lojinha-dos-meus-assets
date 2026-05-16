@@ -8,15 +8,21 @@ import (
 
 	"github.com/manoIvans/lojinha-assets/internal/auth"
 	"github.com/manoIvans/lojinha-assets/internal/repository/postgres"
+	"github.com/manoIvans/lojinha-assets/internal/storage"
 	"github.com/manoIvans/lojinha-assets/internal/transport/http/handler"
 	"github.com/manoIvans/lojinha-assets/internal/transport/http/middleware"
 )
 
 // NewRouter monta o roteador Gin com todas as rotas e middlewares
-// da aplicação. As dependências (db, token manager) entram por
-// parâmetro — nada de singletons globais.
-func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager) *gin.Engine {
+// da aplicação. As dependências (db, token manager, storage de
+// arquivos) entram por parâmetro — nada de singletons globais.
+func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStorage) *gin.Engine {
 	r := gin.Default() // logger + recovery já inclusos
+
+	// MaxMultipartMemory controla quanto do upload fica em RAM antes
+	// de transbordar para tempfile. 32 MiB é confortável para os
+	// limites desta API (5 MiB thumb + 100 MiB modelo).
+	r.MaxMultipartMemory = 32 << 20
 
 	healthHandler := handler.NewHealthHandler(db)
 	r.GET("/ping", healthHandler.Ping)
@@ -25,7 +31,7 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager) *gin.Engine {
 	authHandler := handler.NewAuthHandler(userRepo, tm)
 
 	assetRepo := postgres.NewAssetRepository(db)
-	assetHandler := handler.NewAssetHandler(assetRepo)
+	assetHandler := handler.NewAssetHandler(assetRepo, files)
 
 	api := r.Group("/api/v1")
 	{

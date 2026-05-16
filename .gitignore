@@ -22,3 +22,7 @@ coverage.*
 # OS
 .DS_Store
 Thumbs.db
+
+# Arquivos de upload (thumbnails e modelos 3D) — conteúdo de runtime,
+# não pertence ao repo. A estrutura é recriada pelo LocalStorage no boot.
+/uploads/

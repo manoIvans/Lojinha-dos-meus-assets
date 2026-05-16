@@ -18,6 +18,10 @@ type Config struct {
 	DatabaseURL string
 	JWTSecret   string
 	JWTTTL      time.Duration
+	// UploadDir é a raiz onde o LocalStorage cria thumbnails/ e models/.
+	// Caminho relativo ao CWD do processo (geralmente a raiz do projeto
+	// em dev, ou um volume montado em produção).
+	UploadDir string
 }
 
 // Load lê o arquivo .env (se existir) e popula a struct Config.
@@ -43,6 +47,7 @@ func Load() (*Config, error) {
 		DatabaseURL: os.Getenv("DATABASE_URL"),
 		JWTSecret:   os.Getenv("JWT_SECRET"),
 		JWTTTL:      time.Duration(ttlHours) * time.Hour,
+		UploadDir:   getEnv("UPLOAD_DIR", "uploads"),
 	}
 
 	// DATABASE_URL não tem default por design: rodar o servidor sem

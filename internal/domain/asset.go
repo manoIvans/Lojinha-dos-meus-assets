@@ -18,20 +18,23 @@ var ErrAssetNotFound = errors.New("asset não encontrado")
 // (a listagem retorna todos), então não há informação a esconder.
 var ErrAssetForbidden = errors.New("operação não permitida neste asset")
 
-// Asset representa um item à venda na Lojinha. Por enquanto só
-// metadados — o arquivo físico (.glb, imagem) ficará em storage
-// separado e será referenciado em uma coluna futura (ex: file_url).
+// Asset representa um item à venda na Lojinha. Metadados + ponteiros
+// para os arquivos físicos (thumbnail e modelo 3D). Os arquivos em si
+// vivem em disco (ou eventualmente em object storage); aqui guardamos
+// só o caminho relativo, devolvido pelo storage no momento do upload.
 //
 // PriceCents é inteiro (centavos) para evitar a clássica armadilha
 // de float em dinheiro. Conversão para "R$ 12,34" é responsabilidade
 // da camada de apresentação.
 type Asset struct {
-	ID          int64     `json:"id"`
-	OwnerID     int64     `json:"owner_id"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	Category    string    `json:"category"`
-	PriceCents  int64     `json:"price_cents"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID            int64     `json:"id"`
+	OwnerID       int64     `json:"owner_id"`
+	Title         string    `json:"title"`
+	Description   string    `json:"description"`
+	Category      string    `json:"category"`
+	PriceCents    int64     `json:"price_cents"`
+	ThumbnailPath string    `json:"thumbnail_path"`
+	ModelPath     string    `json:"model_path"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }

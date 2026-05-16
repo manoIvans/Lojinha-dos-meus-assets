@@ -25,7 +25,7 @@ func NewAssetRepository(db *pgxpool.Pool) *AssetRepository {
 // assetColumns centraliza a lista de colunas usada nos SELECT/RETURNING
 // para garantir que Scan e schema fiquem em sincronia. Se você adicionar
 // uma coluna, mexe aqui e o compilador te lembra de atualizar Scan.
-const assetColumns = "id, owner_id, title, description, category, price_cents, created_at, updated_at"
+const assetColumns = "id, owner_id, title, description, category, price_cents, thumbnail_path, model_path, created_at, updated_at"
 
 // scanAsset preenche um domain.Asset a partir de qualquer Row pgx —
 // reuso entre Create/Update/FindByID. Mantém a ordem de colunas
@@ -33,21 +33,24 @@ const assetColumns = "id, owner_id, title, description, category, price_cents, c
 func scanAsset(row pgx.Row, a *domain.Asset) error {
 	return row.Scan(
 		&a.ID, &a.OwnerID, &a.Title, &a.Description,
-		&a.Category, &a.PriceCents, &a.CreatedAt, &a.UpdatedAt,
+		&a.Category, &a.PriceCents,
+		&a.ThumbnailPath, &a.ModelPath,
+		&a.CreatedAt, &a.UpdatedAt,
 	)
 }
 
 // Create insere um novo asset. ownerID vem do JWT, NUNCA do corpo da
 // request — quem chama essa função (handler) é responsável por
-// extrair do token e passar aqui.
-func (r *AssetRepository) Create(ctx context.Context, ownerID int64, title, description, category string, priceCents int64) (*domain.Asset, error) {
+// extrair do token e passar aqui. thumbnailPath/modelPath vêm do
+// storage já validados (UUID + extensão), nunca direto do cliente.
+func (r *AssetRepository) Create(ctx context.Context, ownerID int64, title, description, category string, priceCents int64, thumbnailPath, modelPath string) (*domain.Asset, error) {
 	const q = `
-		INSERT INTO assets (owner_id, title, description, category, price_cents)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO assets (owner_id, title, description, category, price_cents, thumbnail_path, model_path)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING ` + assetColumns
 
 	a := &domain.Asset{}
-	if err := scanAsset(r.db.QueryRow(ctx, q, ownerID, title, description, category, priceCents), a); err != nil {
+	if err := scanAsset(r.db.QueryRow(ctx, q, ownerID, title, description, category, priceCents, thumbnailPath, modelPath), a); err != nil {
 		return nil, fmt.Errorf("insert asset: %w", err)
 	}
 	return a, nil

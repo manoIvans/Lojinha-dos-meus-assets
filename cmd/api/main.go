@@ -12,6 +12,7 @@ import (
 	"github.com/manoIvans/lojinha-assets/internal/auth"
 	"github.com/manoIvans/lojinha-assets/internal/config"
 	"github.com/manoIvans/lojinha-assets/internal/repository/postgres"
+	"github.com/manoIvans/lojinha-assets/internal/storage"
 	httptransport "github.com/manoIvans/lojinha-assets/internal/transport/http"
 )
 
@@ -42,16 +43,27 @@ func main() {
 	// daqui.
 	tokenManager := auth.NewTokenManager(cfg.JWTSecret, cfg.JWTTTL)
 
-	// 5) Roteador + servidor HTTP. Os timeouts aqui são DEFENSIVOS:
-	// protegem contra clientes lentos que segurariam conexões abertas
-	// indefinidamente (slowloris). Sem isso, sua API fica vulnerável.
-	router := httptransport.NewRouter(db, tokenManager)
+	// 5) Storage local para os arquivos físicos dos assets. Criar
+	// no boot garante que falhas de permissão/disco apareçam aqui
+	// e não na primeira request de upload em produção.
+	fileStorage, err := storage.NewLocalStorage(cfg.UploadDir)
+	if err != nil {
+		log.Fatalf("storage: %v", err)
+	}
+	log.Printf("uploads em %q", cfg.UploadDir)
+
+	// 6) Roteador + servidor HTTP. Os timeouts são DEFENSIVOS, mas
+	// precisam acomodar uploads grandes (.glb pode chegar a ~100 MiB).
+	// Por isso usamos ReadHeaderTimeout curto (protege contra slowloris
+	// no handshake) e ReadTimeout longo (cobre upload em conexão lenta).
+	router := httptransport.NewRouter(db, tokenManager, fileStorage)
 	srv := &http.Server{
-		Addr:         httptransport.Addr(cfg.AppPort),
-		Handler:      router,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              httptransport.Addr(cfg.AppPort),
+		Handler:           router,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       5 * time.Minute,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	// 5) Servidor sobe em goroutine separada para que a main thread
