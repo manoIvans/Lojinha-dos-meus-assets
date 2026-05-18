@@ -1,24 +1,22 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ApiError, api, fileUrl, type Asset } from '../api/client'
+import { useAuth } from '../auth/AuthContext'
 import ModelViewer from '../components/ModelViewer'
 
-// AssetDetail (/asset/:id): página de detalhe do asset, dividida em
-// duas regiões via grid:
-//   - lg:col-span-2 → Visualizador 3D (2/3 da largura no desktop)
-//   - lg              → Painel de metadados (1/3 da largura)
-// Em mobile (sem prefixo lg:), as regiões empilham vertical com o
-// viewer em cima.
+// AssetDetail (/asset/:id): página de detalhe do asset.
 //
-// Estado é modelado em 3 variáveis distintas porque os casos não são
-// mutuamente exclusivos durante o ciclo de vida da request:
-//   - loading: enquanto o fetch está pendente
-//   - notFound: 404 do backend (asset que NUNCA existiu ou foi deletado)
-//   - error: qualquer outro fail (rede, 5xx, etc.)
+// Layout em três blocos verticais:
+//   1. Back link (◀ Voltar à galeria) — pequeno, no topo
+//   2. Hero card — título grande + autor + #id + data
+//   3. Grid 2/3 + 1/3 (no desktop) — Viewer + Info
+//   4. (SE for dono) OwnerPanel com botões de editar/excluir
 //
-// notFound vs error são separados de propósito: o copy é diferente
-// ("não existe" vs "deu pau ao buscar"), e a UX talvez evolua pra
-// oferecer "tentar de novo" só no segundo caso.
+// Três variáveis de estado de propósito não-mutuamente-exclusivas:
+//   - loading: fetch em andamento
+//   - notFound: 404 do backend (asset deletado ou nunca existiu)
+//   - error: rede/5xx/etc
+// Diferenciar 404 de erro genérico permite copy distinto.
 export default function AssetDetail() {
   const { id } = useParams<{ id: string }>()
   const [asset, setAsset] = useState<Asset | null>(null)
@@ -27,8 +25,6 @@ export default function AssetDetail() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    // Sem id válido na URL, redireciona pra erro 404-ish em vez de
-    // chamar a API com path malformado.
     if (!id) {
       setNotFound(true)
       setLoading(false)
@@ -64,30 +60,72 @@ export default function AssetDetail() {
 
   if (loading) return <LoadingState />
   if (notFound) return <NotFoundState />
-  if (error || !asset) return <ErrorState message={error ?? 'Erro desconhecido'} />
+  if (error || !asset)
+    return <ErrorState message={error ?? 'Erro desconhecido'} />
 
   return <Detail asset={asset} />
 }
 
-// Detail é o componente puro que renderiza o conteúdo quando o asset
-// foi carregado com sucesso. Separado da página principal porque
-// (1) evita um if/return gigante no componente top-level, (2) deixa
-// fácil de testar isoladamente passando um asset mock.
 function Detail({ asset }: { asset: Asset }) {
+  const { currentUserId } = useAuth()
+  const navigate = useNavigate()
+
+  // Comparação só faz sentido se o usuário estiver logado E o asset
+  // tiver owner_id (que sempre tem). isOwner controla a renderização
+  // do OwnerPanel — backend ainda valida ownership em toda mutação
+  // de qualquer jeito.
+  const isOwner =
+    currentUserId !== null && currentUserId === asset.owner_id
+
+  async function handleDelete() {
+    try {
+      await api.delete(`/api/v1/assets/${asset.id}`)
+      navigate('/', { replace: true })
+    } catch (err) {
+      // Em caso de falha (403/404/500), só logamos e deixamos o
+      // OwnerPanel devolver o usuário ao estado anterior. O alert é
+      // bruto mas suficiente até termos um sistema de toasts.
+      console.error('delete asset:', err)
+      alert('Falha ao excluir o asset. Tente novamente.')
+    }
+  }
+
   return (
-    <div className="max-w-7xl mx-auto p-6">
+    <div className="max-w-7xl mx-auto p-6 space-y-6">
       <Link
         to="/"
-        className="inline-block mb-4 text-xs font-bold uppercase tracking-widest text-parchment hover:underline underline-offset-4 decoration-2"
+        className="inline-block text-xs font-bold uppercase tracking-widest text-parchment hover:underline underline-offset-4 decoration-2"
       >
         ◀ Voltar à galeria
       </Link>
 
+      <header className="bg-parchment border-4 border-ink shadow-pixel">
+        <p className="bg-arcane text-parchment font-pixel text-xs uppercase border-b-4 border-ink px-4 py-3">
+          ▶ Asset #{asset.id}
+        </p>
+        <div className="px-6 py-5 space-y-2">
+          <h1 className="text-2xl md:text-3xl font-bold uppercase tracking-wider break-words leading-tight">
+            {asset.title}
+          </h1>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs uppercase tracking-widest">
+            <span>
+              por{' '}
+              <span className="font-bold">
+                {asset.author_name ?? 'anônimo'}
+              </span>
+            </span>
+            <span aria-hidden="true" className="text-ink/30">
+              │
+            </span>
+            <span>{formatDate(asset.created_at)}</span>
+          </div>
+        </div>
+      </header>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Visualizador 3D — 2/3 da largura no desktop */}
         <section className="lg:col-span-2">
           <div className="bg-parchment border-4 border-ink shadow-pixel">
-            <h2 className="bg-arcane text-parchment font-pixel text-sm uppercase border-b-4 border-ink px-4 py-3">
+            <h2 className="bg-arcane text-parchment font-pixel text-xs uppercase border-b-4 border-ink px-4 py-3">
               ▶ Visualizador
             </h2>
             <div className="p-4">
@@ -103,52 +141,36 @@ function Detail({ asset }: { asset: Asset }) {
           </div>
         </section>
 
-        {/* Painel de metadados — 1/3 da largura no desktop */}
         <aside>
           <div className="bg-parchment border-4 border-ink shadow-pixel">
-            <h2 className="bg-arcane text-parchment font-pixel text-sm uppercase border-b-4 border-ink px-4 py-3">
-              ▶ Detalhes
+            <h2 className="bg-arcane text-parchment font-pixel text-xs uppercase border-b-4 border-ink px-4 py-3">
+              ▶ Info
             </h2>
 
-            <div className="p-4 space-y-4">
-              {/* Título + autor */}
-              <div>
-                <h1 className="text-lg font-bold uppercase tracking-wider break-words">
-                  {asset.title}
-                </h1>
-                <p className="text-xs uppercase tracking-wider text-ink/60 mt-1">
-                  por{' '}
-                  <span className="font-bold">
-                    {asset.author_name ?? 'anônimo'}
-                  </span>
+            <div className="p-6 space-y-5">
+              <div className="bg-twilight text-parchment border-4 border-ink shadow-pixel-sm px-4 py-3 text-center">
+                <p className="text-[10px] uppercase tracking-widest text-parchment/70">
+                  Preço
+                </p>
+                <p className="text-2xl font-bold mt-1">
+                  ✦ {formatPrice(asset.price_cents)}
                 </p>
               </div>
 
-              {/* Preço — proeminente */}
-              <p className="text-2xl font-bold">
-                ✦ {formatPrice(asset.price_cents)}
-              </p>
-
-              {/* Descrição. whitespace-pre-wrap preserva quebras de
-                  linha que o autor digitou no formulário. */}
-              <div className="border-t-4 border-ink pt-4">
-                <h3 className="text-xs font-bold uppercase tracking-widest mb-2">
-                  Descrição
+              <div>
+                <h3 className="text-[10px] font-bold uppercase tracking-widest mb-2 text-ink/60">
+                  ▸ Descrição
                 </h3>
                 <p className="text-sm leading-relaxed whitespace-pre-wrap">
                   {asset.description.trim() || (
-                    <span className="text-ink/50">— sem descrição —</span>
+                    <span className="text-ink/40">— sem descrição —</span>
                   )}
                 </p>
               </div>
 
-              {/* Tags. Hoje o backend só tem `category` (uma string).
-                  Renderizamos como uma "tag" única — quando virar
-                  multi-tag (coluna text[] ou tabela pivot), basta
-                  trocar o array fonte. */}
-              <div className="border-t-4 border-ink pt-4">
-                <h3 className="text-xs font-bold uppercase tracking-widest mb-2">
-                  Tags
+              <div>
+                <h3 className="text-[10px] font-bold uppercase tracking-widest mb-2 text-ink/60">
+                  ▸ Tags
                 </h3>
                 <div className="flex flex-wrap gap-2">
                   <span className="inline-block bg-arcane text-parchment text-[10px] px-2 py-1 uppercase tracking-widest font-bold">
@@ -160,7 +182,119 @@ function Detail({ asset }: { asset: Asset }) {
           </div>
         </aside>
       </div>
+
+      {/* OwnerPanel só aparece quando o usuário logado é o dono. UI
+          gate aqui; backend valida ownership em PUT/DELETE de qualquer
+          jeito (ErrAssetForbidden → 403). */}
+      {isOwner && <OwnerPanel asset={asset} onConfirmDelete={handleDelete} />}
     </div>
+  )
+}
+
+// OwnerPanel: ações destrutivas isoladas num card próprio, fora do
+// painel de Info. Exclusão tem confirm inline (estado local) em vez
+// de window.confirm() — preserva a estética pixel-art e não quebra
+// o usuário com um dialog nativo do navegador.
+function OwnerPanel({
+  asset,
+  onConfirmDelete,
+}: {
+  asset: Asset
+  onConfirmDelete: () => void | Promise<void>
+}) {
+  const [confirming, setConfirming] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  async function handleConfirm() {
+    setDeleting(true)
+    try {
+      await onConfirmDelete()
+      // Sem reset de state — em caso de sucesso a página será
+      // desmontada via navigate('/').
+    } catch {
+      setDeleting(false)
+      setConfirming(false)
+    }
+  }
+
+  return (
+    <section>
+      <div className="bg-parchment border-4 border-ink shadow-pixel">
+        <h2 className="bg-arcane text-parchment font-pixel text-xs uppercase border-b-4 border-ink px-4 py-3">
+          ▶ Zona do dono
+        </h2>
+        <div className="p-6">
+          {confirming ? (
+            <div className="space-y-4">
+              <p className="text-sm">
+                <span className="font-bold uppercase tracking-widest">
+                  ✗ Excluir?
+                </span>{' '}
+                Você vai remover permanentemente{' '}
+                <span className="italic">“{asset.title}”</span>. Esta
+                ação não pode ser desfeita.
+              </p>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={handleConfirm}
+                  disabled={deleting}
+                  className="
+                    bg-ink text-parchment border-4 border-ink shadow-pixel
+                    px-4 py-2 text-xs font-bold uppercase tracking-widest
+                    transition-all duration-75 ease-out
+                    hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none
+                    disabled:opacity-50 disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-pixel
+                  "
+                >
+                  {deleting ? '...' : '✗ Sim, excluir'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirming(false)}
+                  disabled={deleting}
+                  className="
+                    bg-parchment text-ink border-4 border-ink shadow-pixel
+                    px-4 py-2 text-xs font-bold uppercase tracking-widest
+                    transition-all duration-75 ease-out
+                    hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none
+                    disabled:opacity-50
+                  "
+                >
+                  ◀ Cancelar
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-3">
+              <Link
+                to={`/asset/${asset.id}/edit`}
+                className="
+                  bg-arcane text-parchment border-4 border-ink shadow-pixel
+                  px-4 py-2 text-xs font-bold uppercase tracking-widest
+                  transition-all duration-75 ease-out
+                  hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none
+                "
+              >
+                ▶ Editar
+              </Link>
+              <button
+                type="button"
+                onClick={() => setConfirming(true)}
+                className="
+                  bg-parchment text-ink border-4 border-ink shadow-pixel
+                  px-4 py-2 text-xs font-bold uppercase tracking-widest
+                  transition-all duration-75 ease-out
+                  hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none
+                "
+              >
+                ✗ Excluir
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -234,9 +368,6 @@ function ErrorState({ message }: { message: string }) {
   )
 }
 
-// formatPrice em escopo de módulo: construtor de Intl.NumberFormat é
-// caro relativo ao .format(). Duplicado em AssetCard.tsx — quando
-// aparecer um terceiro consumer, extrair pra src/lib/format.ts.
 const priceFormatter = new Intl.NumberFormat('pt-BR', {
   style: 'currency',
   currency: 'BRL',
@@ -244,4 +375,14 @@ const priceFormatter = new Intl.NumberFormat('pt-BR', {
 
 function formatPrice(cents: number): string {
   return priceFormatter.format(cents / 100)
+}
+
+const dateFormatter = new Intl.DateTimeFormat('pt-BR', {
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+})
+
+function formatDate(iso: string): string {
+  return dateFormatter.format(new Date(iso))
 }

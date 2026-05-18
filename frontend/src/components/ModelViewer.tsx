@@ -1,4 +1,11 @@
-import { Suspense, useLayoutEffect } from 'react'
+import {
+  Suspense,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ComponentRef,
+} from 'react'
 import { Canvas } from '@react-three/fiber'
 import {
   Center,
@@ -8,90 +15,77 @@ import {
   OrbitControls,
   useGLTF,
 } from '@react-three/drei'
-import type { Mesh } from 'three'
+import type { Material, Mesh } from 'three'
 
-// ModelViewer: container 3D pronto pra absorver desde PBR realista até
-// low-poly stylizado, sem "lavar" a cena.
+// ModelViewer: container 3D com toggles de inspeção.
 //
-// Estratégia de iluminação:
-//   1. Environment (HDRI 'city'): provê IBL — reflexos em metais e
-//      brilho difuso ambiente que materiais PBR esperam. Para low-poly
-//      com material plano, o impacto é menor mas inofensivo.
-//   2. ambientLight 0.3: pequeno fill pra que mesmo materiais que
-//      ignoram environment (ex: MeshBasicMaterial) não saiam pretos
-//      em sombras totais.
-//   3. directionalLight 0.8 com castShadow: a "key light" que define o
-//      ângulo principal da iluminação e projeta sombras nítidas.
-//   4. ContactShadows: sombra "soft" colada no chão, dá ancoragem
-//      visual + senso de escala sem precisar de plano de chão.
+// Controles sobrepostos (overlay) no canto superior direito:
+//   - Wireframe: traverse na cena e seta material.wireframe em cada
+//     mesh. Permite inspecionar a retopologia.
+//   - Resetar câmera: chama OrbitControls.reset() pra voltar à pose
+//     inicial (position=[3,3,3] olhando pra origem).
 //
-// Geometria importante: usamos <Center bottom> em vez de <Center>
-// para alinhar a BASE do modelo a y=0. Sem isso, modelos exportados
-// com pivot arbitrário ficariam meio-enterrados no chão de sombra.
+// Geometria/iluminação inalteradas em relação à versão anterior:
+//   Environment 'city' (IBL/PBR), ContactShadows no chão, key light
+//   com castShadow, <Center bottom> alinhando a base do modelo a y=0.
+
 type Props = {
-  // URL completa do arquivo .glb/.gltf — geralmente vem de fileUrl()
-  // do client (ex: http://localhost:8080/uploads/models/<uuid>.glb).
   modelUrl: string
-  // className permite ao consumidor controlar tamanho/aspecto do
-  // container. Sem default — Canvas com altura 0 some, então quem
-  // usa precisa ser explícito.
   className?: string
 }
 
+// Tipo do ref do OrbitControls inferido via ComponentRef pra evitar
+// import direto de `three-stdlib` (transitive da drei).
+type ControlsRef = ComponentRef<typeof OrbitControls>
+
+// Classes reutilizadas entre os botões do overlay — extraídas em
+// const pra uniformizar tamanho/sombra/transição sem repetição.
+const OVERLAY_BTN =
+  'pointer-events-auto border-2 border-ink shadow-pixel-sm ' +
+  'px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest ' +
+  'transition-all duration-75 ease-out ' +
+  'hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none ' +
+  'active:translate-x-[2px] active:translate-y-[2px] active:shadow-none'
+
 export default function ModelViewer({ modelUrl, className }: Props) {
+  const [isWireframe, setIsWireframe] = useState(false)
+  const controlsRef = useRef<ControlsRef>(null)
+
+  // OrbitControls.reset() restaura a câmera ao "saved state". O drei
+  // captura esse state automaticamente na primeira renderização — não
+  // precisamos chamar saveState() manualmente.
+  function resetCamera() {
+    controlsRef.current?.reset()
+  }
+
   return (
-    <div className={className}>
+    <div className={`relative ${className ?? ''}`}>
       <Canvas
-        // shadows={true} habilita o pipeline de shadow map do three.
-        // Sem isso, castShadow/receiveShadow nos elementos é ignorado.
         shadows
         camera={{ position: [3, 3, 3], fov: 50 }}
         dpr={[1, 2]}
         gl={{ preserveDrawingBuffer: false, antialias: true }}
       >
         <ambientLight intensity={0.3} />
-
         <directionalLight
           position={[5, 5, 5]}
           intensity={0.8}
           castShadow
-          // Resolução do shadow map. 1024 dá sombras razoáveis sem
-          // pesar muito; sobe pra 2048 se notar serrilhado evidente.
           shadow-mapSize={[1024, 1024]}
-          // Frustum do shadow camera = área coberta pelo shadow map.
-          // Generoso o bastante (~3 unidades em cada direção) pra
-          // cobrir modelos pequenos a médios; modelos grandes podem
-          // ter sombra clipada nas bordas.
           shadow-camera-near={0.1}
           shadow-camera-far={20}
           shadow-camera-left={-3}
           shadow-camera-right={3}
           shadow-camera-top={3}
           shadow-camera-bottom={-3}
-          // shadow-bias previne "shadow acne" (padrão moiré em
-          // superfícies sombreadas devido a imprecisão de float).
-          // Negativo empurra a sombra um pouquinho pra longe da face.
           shadow-bias={-0.0001}
         />
-
-        {/* HDRI 'city' — neutro/diurno, bom default pra exibir tanto
-            materiais realistas quanto stylizados. Drei baixa sob
-            demanda (~100KB) da CDN; não impacta bundle. Sem prop
-            `background`, o HDRI só atua como IBL (não vira skybox). */}
         <Environment preset="city" />
 
-        {/* Suspense pega a Promise lançada por useGLTF enquanto baixa
-            o arquivo. key={modelUrl} força re-suspensão ao trocar de
-            modelo (sem isso, o fallback só aparece no primeiro load). */}
         <Suspense key={modelUrl} fallback={<Loader />}>
-          <Model url={modelUrl} />
+          <Model url={modelUrl} wireframe={isWireframe} />
         </Suspense>
 
-        {/* ContactShadows projeta a silhueta do modelo num plano
-            invisível em y=0. position=[0,0,0] colado ao chão (base
-            do modelo, dada a <Center bottom>). Blur alto deixa a
-            sombra "soft" — não imita sombra direcional, é uma
-            "ambient occlusion fake" que ancora o modelo na cena. */}
         <ContactShadows
           position={[0, 0, 0]}
           opacity={0.5}
@@ -101,39 +95,78 @@ export default function ModelViewer({ modelUrl, className }: Props) {
           resolution={512}
         />
 
-        <OrbitControls enableDamping dampingFactor={0.1} makeDefault />
+        <OrbitControls
+          ref={controlsRef}
+          enableDamping
+          dampingFactor={0.1}
+          makeDefault
+        />
       </Canvas>
+
+      {/* Overlay de controles no canto superior direito.
+          - pointer-events-none no container: clicks no espaço entre
+            os botões "atravessam" pro Canvas, então o usuário pode
+            arrastar o modelo mesmo perto do overlay.
+          - pointer-events-auto nos botões: só eles capturam clicks. */}
+      <div className="absolute top-3 right-3 flex flex-col gap-2 pointer-events-none">
+        <button
+          type="button"
+          onClick={() => setIsWireframe((v) => !v)}
+          aria-pressed={isWireframe}
+          className={`${OVERLAY_BTN} ${
+            isWireframe
+              ? 'bg-ink text-parchment'
+              : 'bg-parchment text-ink'
+          }`}
+        >
+          {isWireframe ? '◼' : '◻'} Wireframe
+        </button>
+        <button
+          type="button"
+          onClick={resetCamera}
+          className={`${OVERLAY_BTN} bg-parchment text-ink`}
+        >
+          ↺ Resetar
+        </button>
+      </div>
     </div>
   )
 }
 
-// Model: carrega o glTF e prepara cada mesh interno pra participar do
-// shadow map. useGLTF cacheia por URL (instantâneo no segundo load).
-function Model({ url }: { url: string }) {
+// Model: carrega o glTF e propaga shadows + wireframe pra todas as
+// meshes da cena.
+function Model({ url, wireframe }: { url: string; wireframe: boolean }) {
   const { scene } = useGLTF(url)
 
-  // useLayoutEffect (não useEffect) pra rodar ANTES do primeiro paint
-  // — evita um frame onde o modelo aparece sem sombras. Idempotente:
-  // se a mesma cena for renderizada várias vezes, setar a flag de novo
-  // não causa efeito colateral.
+  // Sombras: roda uma vez por scene carregada (idempotente).
   useLayoutEffect(() => {
     scene.traverse((obj) => {
       const mesh = obj as Mesh
       if (mesh.isMesh) {
-        // castShadow: este objeto gera sombra projetada pela
-        // directionalLight. receiveShadow: este objeto pode ter
-        // sombras (de si mesmo ou de outros) renderizadas na sua
-        // superfície. Ambos no modelo dão auto-sombreamento — ex:
-        // braço projeta sombra no peito.
         mesh.castShadow = true
         mesh.receiveShadow = true
       }
     })
   }, [scene])
 
-  // <Center bottom>: alinha a base do bounding box ao y=0 do mundo.
-  // Combinação chave com ContactShadows em y=0 — modelo fica "em pé
-  // no chão" independente de onde o exportador colocou o pivot.
+  // Wireframe: roda quando o toggle muda OU quando a cena troca
+  // (modelo trocado). Cobrir a troca de cena é importante porque o
+  // useGLTF cacheia a scene — uma re-renderização com o mesmo URL
+  // não dispara o "ativei wireframe enquanto trocava de modelo".
+  //
+  // CAVEAT: useGLTF cacheia scenes por URL. Mutar material.wireframe
+  // aqui afeta TODAS as instâncias do mesmo modelo na app. Pra nosso
+  // uso (um viewer por vez no /asset/:id), não é problema. Quando
+  // virar grid de thumbnails 3D, precisará clonar o material.
+  useEffect(() => {
+    scene.traverse((obj) => {
+      const mesh = obj as Mesh
+      if (mesh.isMesh) {
+        applyWireframe(mesh.material, wireframe)
+      }
+    })
+  }, [scene, wireframe])
+
   return (
     <Center bottom>
       <primitive object={scene} />
@@ -141,9 +174,30 @@ function Model({ url }: { url: string }) {
   )
 }
 
+// applyWireframe lida com material como objeto único OU como array
+// (multi-material meshes existem em modelos exportados de Blender
+// com mais de um material por face). Recursão simples cobre os
+// dois casos.
+//
+// Nem todo Material tem a propriedade `wireframe` — ShaderMaterial
+// customizado ou LineMaterial não têm. Checamos antes de setar pra
+// não adicionar prop fantasma.
+function applyWireframe(
+  material: Material | Material[],
+  wireframe: boolean,
+) {
+  if (Array.isArray(material)) {
+    material.forEach((m) => applyWireframe(m, wireframe))
+    return
+  }
+  if ('wireframe' in material) {
+    ;(material as Material & { wireframe: boolean }).wireframe = wireframe
+  }
+}
+
 // Loader: HTML overlay renderizado DENTRO do Canvas via drei <Html>.
-// `center` posiciona o DOM no centro da projeção 3D, então a mensagem
-// fica visualmente no meio do viewer mesmo durante orbit.
+// `center` posiciona o DOM no centro da projeção 3D — fica visualmente
+// no meio do viewer mesmo durante orbit.
 function Loader() {
   return (
     <Html center>

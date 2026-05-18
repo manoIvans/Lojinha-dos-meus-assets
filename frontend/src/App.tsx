@@ -20,6 +20,7 @@ const Login = lazy(() => import('./pages/Login'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const Viewer = lazy(() => import('./pages/Viewer'))
 const AssetDetail = lazy(() => import('./pages/AssetDetail'))
+const AssetEdit = lazy(() => import('./pages/AssetEdit'))
 
 // Fallback minimalista enquanto o chunk da rota carrega. Vazio de
 // propósito: em rede normal o chunk vem em ~50-100ms e qualquer
@@ -70,6 +71,19 @@ export default function App() {
               <Suspense fallback={<RouteFallback />}>
                 <AssetDetail />
               </Suspense>
+            }
+          />
+          {/* /asset/:id/edit: form de edição do dono. Protegida
+              porque PUT exige JWT; o próprio AssetEdit ainda redireciona
+              não-donos pra rota de leitura. */}
+          <Route
+            path="/asset/:id/edit"
+            element={
+              <ProtectedRoute>
+                <Suspense fallback={<RouteFallback />}>
+                  <AssetEdit />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           {/* Catch-all: caminho desconhecido volta pra galeria. */}
