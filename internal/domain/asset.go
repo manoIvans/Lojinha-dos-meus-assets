@@ -27,11 +27,15 @@ var ErrAssetForbidden = errors.New("operação não permitida neste asset")
 // de float em dinheiro. Conversão para "R$ 12,34" é responsabilidade
 // da camada de apresentação.
 type Asset struct {
-	ID            int64     `json:"id"`
-	OwnerID       int64     `json:"owner_id"`
-	Title         string    `json:"title"`
-	Description   string    `json:"description"`
-	Category      string    `json:"category"`
+	ID          int64    `json:"id"`
+	OwnerID     int64    `json:"owner_id"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	// Tags substitui a antiga `Category string` (migração 004): permite
+	// múltiplas classificações por asset. Persistida como text[] no
+	// Postgres; serializada como array JSON. Sempre não-nula (default
+	// é array vazio no schema).
+	Tags          []string  `json:"tags"`
 	PriceCents    int64     `json:"price_cents"`
 	ThumbnailPath string    `json:"thumbnail_path"`
 	ModelPath     string    `json:"model_path"`

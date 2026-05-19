@@ -83,7 +83,9 @@ function EditForm({ asset }: { asset: Asset }) {
 
   const [title, setTitle] = useState(asset.title)
   const [description, setDescription] = useState(asset.description)
-  const [category, setCategory] = useState(asset.category)
+  // tagsInput é string CSV para o input controlado. O array vira string
+  // na inicialização (join), e volta pra array no submit (parseTags).
+  const [tagsInput, setTagsInput] = useState(asset.tags.join(', '))
   const [price, setPrice] = useState(fromCents(asset.price_cents))
 
   const [submitting, setSubmitting] = useState(false)
@@ -96,16 +98,21 @@ function EditForm({ asset }: { asset: Asset }) {
       setError('Preço inválido')
       return
     }
+    const tags = parseTags(tagsInput)
+    if (tags.length === 0) {
+      setError('Pelo menos 1 tag é obrigatória')
+      return
+    }
     setSubmitting(true)
     setError(null)
 
     try {
       // PUT é JSON puro (não multipart) — Update no backend só recebe
-      // os 4 campos de texto. Files ficam intocados.
+      // os campos de texto + tags. Files ficam intocados.
       await api.put<Asset>(`/api/v1/assets/${asset.id}`, {
         title,
         description,
-        category,
+        tags,
         price_cents: priceCents,
       })
       navigate(`/asset/${asset.id}`, { replace: true })
@@ -168,14 +175,14 @@ function EditForm({ asset }: { asset: Asset }) {
 
           <label className="block">
             <span className="text-xs font-bold uppercase tracking-wider">
-              Categoria
+              Tags (separadas por vírgula)
             </span>
             <input
               type="text"
               required
-              maxLength={50}
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
+              placeholder="3D, low-poly, fantasia"
+              value={tagsInput}
+              onChange={(e) => setTagsInput(e.target.value)}
               className={PIXEL_INPUT}
             />
           </label>
@@ -260,6 +267,20 @@ function ErrorState({ message }: { message: string }) {
       </div>
     </div>
   )
+}
+
+// parseTags: mesma lógica do Dashboard. Quando virar 3º caller,
+// extrair pra src/lib/tags.ts.
+function parseTags(raw: string): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const piece of raw.split(/[,\n]/)) {
+    const t = piece.trim()
+    if (!t || seen.has(t)) continue
+    seen.add(t)
+    out.push(t)
+  }
+  return out
 }
 
 // toCents aceita "12", "12.90", "12,90". null pra qualquer coisa

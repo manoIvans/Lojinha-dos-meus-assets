@@ -30,7 +30,11 @@ const FILE_INPUT =
 export default function Dashboard() {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [category, setCategory] = useState('')
+  // tagsInput é o texto cru digitado pelo usuário (separadores
+  // ',' ou newline). Convertido pra array no submit via parseTags.
+  // Manter como string em vez de array no estado deixa o input
+  // ser controlado normalmente como qualquer outro <input>.
+  const [tagsInput, setTagsInput] = useState('')
   const [price, setPrice] = useState('')
   const [thumbnail, setThumbnail] = useState<File | null>(null)
   const [model, setModel] = useState<File | null>(null)
@@ -58,16 +62,25 @@ export default function Dashboard() {
       setError('Preço inválido')
       return
     }
+    const tags = parseTags(tagsInput)
+    if (tags.length === 0) {
+      setError('Pelo menos 1 tag é obrigatória')
+      return
+    }
 
     setSubmitting(true)
     setError(null)
 
     // FormData faz o multipart "automaticamente": cada append vira
-    // uma part do request, com Content-Disposition correto.
+    // uma part do request, com Content-Disposition correto. Tags
+    // viram MÚLTIPLAS parts com o mesmo nome — o Gin lê com
+    // c.PostFormArray("tags").
     const form = new FormData()
     form.append('title', title)
     form.append('description', description)
-    form.append('category', category)
+    for (const t of tags) {
+      form.append('tags', t)
+    }
     form.append('price_cents', String(priceCents))
     form.append('thumbnail', thumbnail)
     form.append('model', model)
@@ -86,7 +99,7 @@ export default function Dashboard() {
   function resetForm() {
     setTitle('')
     setDescription('')
-    setCategory('')
+    setTagsInput('')
     setPrice('')
     setThumbnail(null)
     setModel(null)
@@ -136,11 +149,11 @@ export default function Dashboard() {
             </label>
 
             <Field
-              label="Categoria"
+              label="Tags (separadas por vírgula)"
               required
-              maxLength={50}
-              value={category}
-              onChange={setCategory}
+              placeholder="3D, low-poly, fantasia"
+              value={tagsInput}
+              onChange={setTagsInput}
             />
 
             <Field
@@ -291,6 +304,25 @@ function Callouts({
 }
 
 // --- Helpers -----------------------------------------------------------------
+
+// parseTags pega a string crua do input ("3D, low-poly, fantasia"),
+// quebra por vírgula OU newline, e devolve a lista normalizada:
+//   - trim de whitespace de cada tag
+//   - descarta vazias
+//   - dedup (case-sensitive — "3D" e "3d" podem coexistir)
+// Idempotente. A validação dura (1-10 tags, 1-30 chars cada) acontece
+// no backend — aqui só fazemos o saneamento de entrada.
+function parseTags(raw: string): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const piece of raw.split(/[,\n]/)) {
+    const t = piece.trim()
+    if (!t || seen.has(t)) continue
+    seen.add(t)
+    out.push(t)
+  }
+  return out
+}
 
 // toCents aceita "12", "12.90", "12,90". null para qualquer coisa fora
 // disso. Substituível por lib de money quando precisar validar moeda

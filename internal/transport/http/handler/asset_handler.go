@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"mime/multipart"
 	"net/http"
@@ -21,11 +22,14 @@ import (
 // consumidor decide o contrato, (2) testes ficam triviais com um
 // mock que satisfaça essa interface.
 type assetRepository interface {
-	Create(ctx context.Context, ownerID int64, title, description, category string, priceCents int64, thumbnailPath, modelPath string) (*domain.Asset, error)
+	Create(ctx context.Context, ownerID int64, title, description string, tags []string, priceCents int64, thumbnailPath, modelPath string) (*domain.Asset, error)
 	FindByID(ctx context.Context, id int64) (*domain.Asset, error)
 	List(ctx context.Context) ([]*domain.Asset, error)
-	Update(ctx context.Context, id, ownerID int64, title, description, category string, priceCents int64) (*domain.Asset, error)
-	Delete(ctx context.Context, id, ownerID int64) error
+	ListByOwner(ctx context.Context, ownerID int64) ([]*domain.Asset, error)
+	Update(ctx context.Context, id, ownerID int64, title, description string, tags []string, priceCents int64) (*domain.Asset, error)
+	// Delete devolve os caminhos relativos dos arquivos físicos do
+	// asset deletado, pra que o handler possa removê-los do disco.
+	Delete(ctx context.Context, id, ownerID int64) (thumbnailPath, modelPath string, err error)
 }
 
 // fileStorage abstrai o backend de arquivos. Mesma motivação da
@@ -50,11 +54,14 @@ func NewAssetHandler(assets assetRepository, storage fileStorage) *AssetHandler 
 // arquivos pede um fluxo próprio (upload + invalidação do antigo) e
 // fica para uma rota dedicada. Manter o PUT JSON-puro evita misturar
 // dois mundos no mesmo handler.
+//
+// `dive` no binding faz a validação descer em cada elemento do array:
+// min=1,max=30 aplica por TAG, não no array todo.
 type updateAssetRequest struct {
-	Title       string `json:"title" binding:"required,min=1,max=200"`
-	Description string `json:"description" binding:"max=2000"`
-	Category    string `json:"category" binding:"required,min=1,max=50"`
-	PriceCents  int64  `json:"price_cents" binding:"gte=0"`
+	Title       string   `json:"title" binding:"required,min=1,max=200"`
+	Description string   `json:"description" binding:"max=2000"`
+	Tags        []string `json:"tags" binding:"required,min=1,max=10,dive,min=1,max=30"`
+	PriceCents  int64    `json:"price_cents" binding:"gte=0"`
 }
 
 // Limite TOTAL do body multipart. Soma confortavelmente o teto da
@@ -66,16 +73,16 @@ const maxAssetUploadBytes = 110 << 20 // 110 MiB
 // Create cria um asset cujo dono é o usuário do JWT. Aceita SOMENTE
 // multipart/form-data com os campos:
 //
-//	title, description, category, price_cents (texto)
-//	thumbnail (arquivo .png/.jpg/.jpeg/.webp)
-//	model     (arquivo .glb/.gltf)
+//	title, description, price_cents (texto)
+//	tags        (array — repetir o campo: tags=a&tags=b&tags=c)
+//	thumbnail   (arquivo .png/.jpg/.jpeg/.webp)
+//	model       (arquivo .glb/.gltf)
 //
 // Esta rota só existe dentro do grupo protegido — se chegar aqui
-// sem userID no contexto, é bug de configuração de rota e respondemos 500.
+// sem userID no contexto, userIDFromContext já loga + responde 500.
 func (h *AssetHandler) Create(c *gin.Context) {
 	ownerID, ok := userIDFromContext(c)
 	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "usuário não identificado no contexto"})
 		return
 	}
 
@@ -124,13 +131,14 @@ func (h *AssetHandler) Create(c *gin.Context) {
 	asset, err := h.assets.Create(
 		c.Request.Context(),
 		ownerID,
-		req.title, req.description, req.category,
+		req.title, req.description,
+		req.tags,
 		req.priceCents,
 		thumbPath, modelPath,
 	)
 	if err != nil {
 		h.cleanup(thumbPath, modelPath)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao criar asset"})
+		serverError(c, "create asset", err, "falha ao criar asset")
 		return
 	}
 
@@ -152,9 +160,17 @@ func (h *AssetHandler) cleanup(paths ...string) {
 type createAssetForm struct {
 	title       string
 	description string
-	category    string
+	tags        []string
 	priceCents  int64
 }
+
+// Limites das tags. Centralizados aqui pra Create e Update validarem
+// a mesma coisa (Update usa via `binding` do Gin, Create chama
+// validateTags manualmente porque multipart não suporta dive).
+const (
+	maxTagsPerAsset = 10
+	maxTagLength    = 30
+)
 
 // parseCreateAssetForm aplica as mesmas regras que antes vinham do
 // `binding` do Gin, agora à mão porque multipart não suporta
@@ -162,7 +178,9 @@ type createAssetForm struct {
 func parseCreateAssetForm(c *gin.Context) (createAssetForm, error) {
 	title := strings.TrimSpace(c.PostForm("title"))
 	description := strings.TrimSpace(c.PostForm("description"))
-	category := strings.TrimSpace(c.PostForm("category"))
+	// PostFormArray junta múltiplos valores do mesmo nome — funciona
+	// com cliente fazendo `form.append('tags', 'a'); form.append('tags', 'b')`.
+	tags := normalizeTags(c.PostFormArray("tags"))
 	rawPrice := strings.TrimSpace(c.PostForm("price_cents"))
 
 	if l := len(title); l < 1 || l > 200 {
@@ -171,8 +189,8 @@ func parseCreateAssetForm(c *gin.Context) (createAssetForm, error) {
 	if len(description) > 2000 {
 		return createAssetForm{}, errors.New("description deve ter no máximo 2000 caracteres")
 	}
-	if l := len(category); l < 1 || l > 50 {
-		return createAssetForm{}, errors.New("category deve ter entre 1 e 50 caracteres")
+	if err := validateTags(tags); err != nil {
+		return createAssetForm{}, err
 	}
 
 	priceCents, err := strconv.ParseInt(rawPrice, 10, 64)
@@ -183,9 +201,51 @@ func parseCreateAssetForm(c *gin.Context) (createAssetForm, error) {
 	return createAssetForm{
 		title:       title,
 		description: description,
-		category:    category,
+		tags:        tags,
 		priceCents:  priceCents,
 	}, nil
+}
+
+// normalizeTags faz o saneamento canônico de uma lista de tags:
+//   - trim de whitespace
+//   - descarta vazias
+//   - dedupica (case-sensitive — "3D" e "3d" coexistem por escolha)
+//
+// Idempotente: rodar 2x dá o mesmo resultado. Usado tanto pra entrada
+// crua do form quanto pra normalizar o array que veio do JSON do PUT.
+func normalizeTags(raw []string) []string {
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, t := range raw {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	return out
+}
+
+// validateTags impõe os mesmos limites que o `binding` do Update
+// declara (1..10 tags, cada uma com 1..30 chars). Centralizar
+// aqui evita drift entre os dois caminhos de entrada.
+func validateTags(tags []string) error {
+	if len(tags) < 1 {
+		return errors.New("ao menos 1 tag é obrigatória")
+	}
+	if len(tags) > maxTagsPerAsset {
+		return fmt.Errorf("máximo %d tags por asset", maxTagsPerAsset)
+	}
+	for _, t := range tags {
+		if l := len(t); l < 1 || l > maxTagLength {
+			return fmt.Errorf("cada tag deve ter entre 1 e %d caracteres", maxTagLength)
+		}
+	}
+	return nil
 }
 
 // writeStorageError mapeia os erros sentinel do pacote storage para
@@ -211,7 +271,25 @@ func writeStorageError(c *gin.Context, err error, field string) {
 func (h *AssetHandler) List(c *gin.Context) {
 	assets, err := h.assets.List(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao listar assets"})
+		serverError(c, "list assets", err, "falha ao listar assets")
+		return
+	}
+	c.JSON(http.StatusOK, assets)
+}
+
+// MyAssets é o List filtrado pelo dono autenticado. Rota dedicada
+// (em vez de um query param "?mine=true" em /assets) porque o filtro
+// é por identidade do JWT, não por dado público — separar a rota
+// deixa explícito que ela exige auth e nunca vaza assets alheios.
+func (h *AssetHandler) MyAssets(c *gin.Context) {
+	ownerID, ok := userIDFromContext(c)
+	if !ok {
+		return
+	}
+
+	assets, err := h.assets.ListByOwner(c.Request.Context(), ownerID)
+	if err != nil {
+		serverError(c, "list my assets", err, "falha ao listar seus assets")
 		return
 	}
 	c.JSON(http.StatusOK, assets)
@@ -231,7 +309,7 @@ func (h *AssetHandler) GetByID(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "asset não encontrado"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao buscar asset"})
+		serverError(c, "get asset by id", err, "falha ao buscar asset")
 		return
 	}
 	c.JSON(http.StatusOK, asset)
@@ -244,7 +322,6 @@ func (h *AssetHandler) GetByID(c *gin.Context) {
 func (h *AssetHandler) Update(c *gin.Context) {
 	ownerID, ok := userIDFromContext(c)
 	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "usuário não identificado no contexto"})
 		return
 	}
 
@@ -265,7 +342,7 @@ func (h *AssetHandler) Update(c *gin.Context) {
 		ownerID,
 		strings.TrimSpace(req.Title),
 		strings.TrimSpace(req.Description),
-		strings.TrimSpace(req.Category),
+		normalizeTags(req.Tags),
 		req.PriceCents,
 	)
 	if err != nil {
@@ -275,7 +352,7 @@ func (h *AssetHandler) Update(c *gin.Context) {
 		case errors.Is(err, domain.ErrAssetForbidden):
 			c.JSON(http.StatusForbidden, gin.H{"error": "este asset não é seu"})
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao atualizar asset"})
+			serverError(c, "update asset", err, "falha ao atualizar asset")
 		}
 		return
 	}
@@ -283,17 +360,21 @@ func (h *AssetHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, asset)
 }
 
-// Delete remove o asset. Mesma regra de ownership do Update. 204 No
-// Content em sucesso — não há corpo útil para devolver.
+// Delete remove o asset E os arquivos físicos associados. Mesma regra
+// de ownership do Update. 204 No Content em sucesso.
 //
-// Nota: por ora NÃO removemos os arquivos do disco no Delete. Isso
-// será adicionado quando o fluxo de exclusão estiver mais maduro
-// (ex: soft delete + GC posterior). Vazar bytes é menos pior do que
-// excluir por engano o arquivo errado por um bug nessa ponte.
+// Ordem importa: DB delete acontece PRIMEIRO; só depois removemos do
+// disco. Assim, se o DB falhar, os arquivos continuam intactos (caller
+// pode tentar de novo). Se o file remove falhar depois do DB delete,
+// só logamos — o asset já sumiu do catálogo, arquivos órfãos no disco
+// são "vazamento aceitável" em comparação a um asset zumbi (registro
+// existe, arquivo não).
+//
+// NÃO é soft delete — exclusão é irreversível. Se um dia o produto
+// pedir "lixeira", vira um campo `deleted_at` + cron de GC dos órfãos.
 func (h *AssetHandler) Delete(c *gin.Context) {
 	ownerID, ok := userIDFromContext(c)
 	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "usuário não identificado no contexto"})
 		return
 	}
 
@@ -302,31 +383,55 @@ func (h *AssetHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	if err := h.assets.Delete(c.Request.Context(), id, ownerID); err != nil {
+	thumbPath, modelPath, err := h.assets.Delete(c.Request.Context(), id, ownerID)
+	if err != nil {
 		switch {
 		case errors.Is(err, domain.ErrAssetNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "asset não encontrado"})
 		case errors.Is(err, domain.ErrAssetForbidden):
 			c.JSON(http.StatusForbidden, gin.H{"error": "este asset não é seu"})
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao excluir asset"})
+			serverError(c, "delete asset", err, "falha ao excluir asset")
 		}
 		return
 	}
 
+	// Best-effort: storage.Remove já loga erros internamente. Mesmo que
+	// um dos arquivos não exista (ex: deletado manualmente antes), o
+	// request continua sendo 204 — DB é a fonte da verdade.
+	h.cleanup(thumbPath, modelPath)
+
 	c.Status(http.StatusNoContent)
 }
 
-// userIDFromContext extrai o user ID que o middleware RequireAuth
-// gravou. Se não estiver lá, é erro de configuração — quem chama
-// decide o status HTTP de resposta.
+// serverError é o caminho único de 500 com causa: loga o erro real
+// (op + err) pra debug futuro e devolve uma mensagem genérica para
+// o cliente. Centralizar evita "esqueci de logar nesse if 500
+// específico" — todas as 5xx com causa passam por aqui.
+func serverError(c *gin.Context, op string, err error, userMsg string) {
+	log.Printf("%s: %v", op, err)
+	c.JSON(http.StatusInternalServerError, gin.H{"error": userMsg})
+}
+
+// userIDFromContext lê o ID que o middleware RequireAuth gravou.
+// Em caso de falha (bug de config: rota fora do grupo protegido OU
+// tipo inesperado no contexto), já LOGA + responde 500 ele mesmo —
+// o caller só precisa fazer `if !ok { return }`. Centraliza a
+// resposta de erro e o log num lugar só.
 func userIDFromContext(c *gin.Context) (int64, bool) {
 	v, exists := c.Get(middleware.ContextUserIDKey)
 	if !exists {
+		log.Printf("user id missing from context (rota fora do RequireAuth?)")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "usuário não identificado no contexto"})
 		return 0, false
 	}
 	id, ok := v.(int64)
-	return id, ok
+	if !ok {
+		log.Printf("user id in context is not int64: %T", v)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "usuário não identificado no contexto"})
+		return 0, false
+	}
+	return id, true
 }
 
 // parseIDParam lê :id da URL e devolve como int64. Em caso de id

@@ -68,7 +68,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	// trava CPU, mais baixo deixa o hash fraco.
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao processar senha"})
+		serverError(c, "bcrypt hash", err, "falha ao processar senha")
 		return
 	}
 
@@ -78,13 +78,13 @@ func (h *AuthHandler) Register(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"error": "email já cadastrado"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao criar usuário"})
+		serverError(c, "create user", err, "falha ao criar usuário")
 		return
 	}
 
 	token, err := h.tm.Generate(user.ID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao gerar token"})
+		serverError(c, "generate token (register)", err, "falha ao gerar token")
 		return
 	}
 
@@ -113,7 +113,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "credenciais inválidas"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao consultar usuário"})
+		serverError(c, "find user by email", err, "falha ao consultar usuário")
 		return
 	}
 
@@ -124,7 +124,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	token, err := h.tm.Generate(user.ID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao gerar token"})
+		serverError(c, "generate token (login)", err, "falha ao gerar token")
 		return
 	}
 

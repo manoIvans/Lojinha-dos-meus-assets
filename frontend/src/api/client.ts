@@ -29,12 +29,15 @@ export class ApiError extends Error {
 //
 // author_name é opcional porque o backend só popula no List (com
 // JOIN em users). Outros endpoints omitem o campo via omitempty.
+//
+// tags substituiu category (migration 004) — agora multi-valor.
+// Sempre array não-nulo (default '{}' no schema).
 export type Asset = {
   id: number
   owner_id: number
   title: string
   description: string
-  category: string
+  tags: string[]
   price_cents: number
   thumbnail_path: string
   model_path: string

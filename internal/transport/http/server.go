@@ -67,6 +67,12 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStor
 			protected.POST("/assets", assetHandler.Create)
 			protected.PUT("/assets/:id", assetHandler.Update)
 			protected.DELETE("/assets/:id", assetHandler.Delete)
+
+			// "Minha loja": lista os assets do usuário logado.
+			// Namespace /my/* deixa claro que tudo aqui é filtrado
+			// pela identidade do JWT — quando vier /my/library,
+			// /my/orders, etc, ficam todos juntos sob o mesmo prefixo.
+			protected.GET("/my/assets", assetHandler.MyAssets)
 		}
 	}
 

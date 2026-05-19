@@ -45,10 +45,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // currentUserId computado a partir do token. useMemo evita
   // re-decodificar a cada render quando o token não muda.
+  //
+  // Campo `uid` (não user_id) — convenção definida pelo backend Go
+  // em internal/auth/jwt.go.
   const currentUserId = useMemo<number | null>(() => {
     if (!token) return null
     const payload = decodeJwt(token)
-    return typeof payload?.user_id === 'number' ? payload.user_id : null
+    return typeof payload?.uid === 'number' ? payload.uid : null
   }, [token])
 
   // useMemo evita recriar o objeto a cada render. Sem isso, todo

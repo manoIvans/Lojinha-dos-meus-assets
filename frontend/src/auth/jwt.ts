@@ -10,8 +10,12 @@
 // Estrutura do JWT: header.payload.signature, todos base64url-encoded.
 // Só nos importa o payload (segunda parte).
 
+// `uid` é o nome que o backend Go usa pra serializar o claim
+// (internal/auth/jwt.go: `UserID int64 ` + tag `json:"uid"`).
+// Se o backend mudar pra outro nome, atualizar AQUI E LÁ — desalinhar
+// faz o frontend nunca detectar o dono (isOwner sempre false).
 export type JwtPayload = {
-  user_id?: number
+  uid?: number
   exp?: number
   iat?: number
   [key: string]: unknown

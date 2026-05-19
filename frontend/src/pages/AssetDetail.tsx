@@ -168,15 +168,28 @@ function Detail({ asset }: { asset: Asset }) {
                 </p>
               </div>
 
+              {/* Tags multi-valor (migration 004). flex-wrap permite
+                  quebrar linha em modelos com várias. Se vier vazio
+                  (anomalia, schema garante NOT NULL DEFAULT '{}'),
+                  mostramos placeholder discreto. */}
               <div>
                 <h3 className="text-[10px] font-bold uppercase tracking-widest mb-2 text-ink/60">
                   ▸ Tags
                 </h3>
-                <div className="flex flex-wrap gap-2">
-                  <span className="inline-block bg-arcane text-parchment text-[10px] px-2 py-1 uppercase tracking-widest font-bold">
-                    {asset.category}
-                  </span>
-                </div>
+                {asset.tags.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {asset.tags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="inline-block bg-arcane text-parchment text-[10px] px-2 py-1 uppercase tracking-widest font-bold"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-ink/40">— sem tags —</p>
+                )}
               </div>
             </div>
           </div>

@@ -72,9 +72,17 @@ export default function Layout() {
             Galeria
           </NavLink>
           {isAuthenticated && (
-            <NavLink to="/dashboard" className={navLinkClasses}>
-              Dashboard
-            </NavLink>
+            <>
+              <NavLink to="/my-store" className={navLinkClasses}>
+                Minha Loja
+              </NavLink>
+              <NavLink to="/library" className={navLinkClasses}>
+                Biblioteca
+              </NavLink>
+              <NavLink to="/dashboard" className={navLinkClasses}>
+                Dashboard
+              </NavLink>
+            </>
           )}
 
           {/* Ação de auth alinhada à direita. Estilizada como pílula

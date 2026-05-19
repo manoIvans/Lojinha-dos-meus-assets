@@ -21,6 +21,8 @@ const Dashboard = lazy(() => import('./pages/Dashboard'))
 const Viewer = lazy(() => import('./pages/Viewer'))
 const AssetDetail = lazy(() => import('./pages/AssetDetail'))
 const AssetEdit = lazy(() => import('./pages/AssetEdit'))
+const MyStore = lazy(() => import('./pages/MyStore'))
+const Library = lazy(() => import('./pages/Library'))
 
 // Fallback minimalista enquanto o chunk da rota carrega. Vazio de
 // propósito: em rede normal o chunk vem em ~50-100ms e qualquer
@@ -82,6 +84,30 @@ export default function App() {
               <ProtectedRoute>
                 <Suspense fallback={<RouteFallback />}>
                   <AssetEdit />
+                </Suspense>
+              </ProtectedRoute>
+            }
+          />
+          {/* /my-store: vitrine dos assets do dono. Protegida — só
+              faz sentido quando há usuário logado pra filtrar. */}
+          <Route
+            path="/my-store"
+            element={
+              <ProtectedRoute>
+                <Suspense fallback={<RouteFallback />}>
+                  <MyStore />
+                </Suspense>
+              </ProtectedRoute>
+            }
+          />
+          {/* /library: stub do "comprados". Mesmo sem dados, ficar
+              protegida deixa explícito que é página pessoal. */}
+          <Route
+            path="/library"
+            element={
+              <ProtectedRoute>
+                <Suspense fallback={<RouteFallback />}>
+                  <Library />
                 </Suspense>
               </ProtectedRoute>
             }

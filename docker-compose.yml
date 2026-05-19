@@ -55,6 +55,12 @@ services:
       APP_ENV: ${APP_ENV:-development}
       APP_PORT: "8080"
 
+      # Gin em modo release: logs mais limpos (sem dump completo de rotas
+      # no startup, sem warnings de "engine already has middleware"),
+      # ainda mantém a linha de log padrão por request. Sobrescreva pra
+      # "debug" via .env se precisar inspecionar o roteador.
+      GIN_MODE: ${GIN_MODE:-release}
+
       # ATENÇÃO: host = "postgres" (nome do serviço), NÃO "localhost".
       # Dentro do container API, localhost aponta pro próprio container,
       # não pro DB. A rede default do compose resolve nomes de serviço

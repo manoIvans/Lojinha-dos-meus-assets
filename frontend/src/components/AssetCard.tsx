@@ -53,9 +53,21 @@ function AssetCardImpl({ asset, priority = false }: Props) {
       </div>
 
       <div className="border-t-4 border-ink p-3 space-y-1.5">
-        <span className="inline-block bg-arcane text-parchment text-[10px] px-2 py-0.5 uppercase tracking-widest font-bold">
-          {asset.category}
-        </span>
+        {/* No card mostramos só a primeira tag + um "+N" se houver mais —
+            evita ocupar espaço demais em modelos muito tageados. A lista
+            completa fica no /asset/:id. */}
+        {asset.tags.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            <span className="inline-block bg-arcane text-parchment text-[10px] px-2 py-0.5 uppercase tracking-widest font-bold">
+              {asset.tags[0]}
+            </span>
+            {asset.tags.length > 1 && (
+              <span className="inline-block bg-ink text-parchment text-[10px] px-2 py-0.5 uppercase tracking-widest font-bold">
+                +{asset.tags.length - 1}
+              </span>
+            )}
+          </div>
+        )}
         <h2
           className="font-bold text-sm uppercase tracking-wider truncate"
           title={asset.title}
