@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { ApiError, api, type Asset } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
+import { useToast } from '../components/Toast'
 
 // AssetEdit (/asset/:id/edit): formulário de edição dos metadados de
 // um asset existente. Só edita texto/preço — arquivos (thumbnail e
@@ -80,6 +81,7 @@ export default function AssetEdit() {
 
 function EditForm({ asset }: { asset: Asset }) {
   const navigate = useNavigate()
+  const toast = useToast()
 
   const [title, setTitle] = useState(asset.title)
   const [description, setDescription] = useState(asset.description)
@@ -89,6 +91,10 @@ function EditForm({ asset }: { asset: Asset }) {
   const [price, setPrice] = useState(fromCents(asset.price_cents))
 
   const [submitting, setSubmitting] = useState(false)
+  // Validação de form (campos vazios, preço malformado) continua inline
+  // no banner — fica perto do input que o usuário precisa corrigir.
+  // Erros vindos do backend (401/403/500) viram toast porque não
+  // apontam pra um campo específico.
   const [error, setError] = useState<string | null>(null)
 
   async function handleSubmit(e: FormEvent) {
@@ -115,9 +121,10 @@ function EditForm({ asset }: { asset: Asset }) {
         tags,
         price_cents: priceCents,
       })
+      toast.success('Alterações salvas')
       navigate(`/asset/${asset.id}`, { replace: true })
     } catch (err) {
-      setError(messageFor(err))
+      toast.error(messageFor(err))
       setSubmitting(false)
     }
   }

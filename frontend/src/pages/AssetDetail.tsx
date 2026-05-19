@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ApiError, api, fileUrl, type Asset } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
+import { useToast } from '../components/Toast'
 import ModelViewer from '../components/ModelViewer'
 
 // AssetDetail (/asset/:id): página de detalhe do asset.
@@ -69,6 +70,7 @@ export default function AssetDetail() {
 function Detail({ asset }: { asset: Asset }) {
   const { currentUserId } = useAuth()
   const navigate = useNavigate()
+  const toast = useToast()
 
   // Comparação só faz sentido se o usuário estiver logado E o asset
   // tiver owner_id (que sempre tem). isOwner controla a renderização
@@ -80,13 +82,17 @@ function Detail({ asset }: { asset: Asset }) {
   async function handleDelete() {
     try {
       await api.delete(`/api/v1/assets/${asset.id}`)
+      // Toast antes do navigate: o ToastProvider vive ACIMA das rotas,
+      // então sobrevive à desmontagem dessa página.
+      toast.success(`"${asset.title}" excluído`)
       navigate('/', { replace: true })
     } catch (err) {
-      // Em caso de falha (403/404/500), só logamos e deixamos o
-      // OwnerPanel devolver o usuário ao estado anterior. O alert é
-      // bruto mas suficiente até termos um sistema de toasts.
+      // OwnerPanel devolve o usuário ao estado pré-confirm via re-throw
+      // (catch interno). Aqui só sinalizamos a falha pro usuário e
+      // logamos pra debugar depois.
       console.error('delete asset:', err)
-      alert('Falha ao excluir o asset. Tente novamente.')
+      toast.error(messageForDelete(err))
+      throw err
     }
   }
 
@@ -379,6 +385,15 @@ function ErrorState({ message }: { message: string }) {
       </div>
     </div>
   )
+}
+
+function messageForDelete(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 401) return 'Sessão expirada'
+    if (err.status === 403) return 'Este asset não é seu'
+    if (err.status === 404) return 'Asset já foi removido'
+  }
+  return 'Falha ao excluir o asset'
 }
 
 const priceFormatter = new Intl.NumberFormat('pt-BR', {

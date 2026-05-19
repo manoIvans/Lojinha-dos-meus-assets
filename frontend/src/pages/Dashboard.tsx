@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError, api, type Asset } from '../api/client'
+import { useToast } from '../components/Toast'
 
 // Dashboard: formulário de upload protegido (/dashboard, atrás do
 // ProtectedRoute). Bate em POST /api/v1/assets com FormData — o api
@@ -28,6 +29,7 @@ const FILE_INPUT =
   'hover:file:bg-ink'
 
 export default function Dashboard() {
+  const toast = useToast()
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   // tagsInput é o texto cru digitado pelo usuário (separadores
@@ -90,7 +92,10 @@ export default function Dashboard() {
       setCreated(asset)
       resetForm()
     } catch (err) {
-      setError(messageFor(err))
+      // Erros do backend (4xx/5xx/rede) viram toast — não apontam pra
+      // um campo específico do form. Validação local (acima) continua
+      // no banner inline porque indica qual campo corrigir.
+      toast.error(messageFor(err))
     } finally {
       setSubmitting(false)
     }
