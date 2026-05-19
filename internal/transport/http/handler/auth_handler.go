@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -17,9 +18,14 @@ import (
 // Definir aqui (e não no pacote postgres) segue o princípio "consumer
 // defines interface" — facilita testes com mocks e desacopla camadas.
 type userRepository interface {
-	Create(ctx context.Context, email, passwordHash string) (*domain.User, error)
+	Create(ctx context.Context, email, passwordHash, username, displayName string) (*domain.User, error)
 	FindByEmail(ctx context.Context, email string) (*domain.User, error)
 }
+
+// usernameRegexp valida o formato de username. Mesma regra do CHECK
+// no banco (migration 005). Centralizar aqui pra que a mensagem de
+// erro seja clara antes mesmo de chegar no Postgres.
+var usernameRegexp = regexp.MustCompile(`^[a-z0-9_]{1,30}$`)
 
 // AuthHandler agrupa as rotas de registro e login.
 type AuthHandler struct {
@@ -36,8 +42,10 @@ func NewAuthHandler(users userRepository, tm *auth.TokenManager) *AuthHandler {
 // senha no register, captcha, etc.) e dois tipos pequenos são mais
 // honestos que um "AuthRequest" genérico.
 type registerRequest struct {
-	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required,min=8"`
+	Email       string `json:"email" binding:"required,email"`
+	Password    string `json:"password" binding:"required,min=8"`
+	Username    string `json:"username" binding:"required,min=1,max=30"`
+	DisplayName string `json:"display_name" binding:"required,min=1,max=60"`
 }
 
 type loginRequest struct {
@@ -63,6 +71,21 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	}
 
 	email := strings.ToLower(strings.TrimSpace(req.Email))
+	// Username é guardado lowercase (igual ao CHECK do schema); o
+	// regex valida o formato a-z0-9_ antes de mandar pro banco para
+	// que a mensagem seja específica em vez do erro genérico do CHECK.
+	username := strings.ToLower(strings.TrimSpace(req.Username))
+	if !usernameRegexp.MatchString(username) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "username deve ter 1-30 caracteres usando apenas a-z, 0-9 e _",
+		})
+		return
+	}
+	displayName := strings.TrimSpace(req.DisplayName)
+	if displayName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "display_name é obrigatório"})
+		return
+	}
 
 	// DefaultCost é 10. Ajuste só com benchmark — custo mais alto
 	// trava CPU, mais baixo deixa o hash fraco.
@@ -72,13 +95,16 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	user, err := h.users.Create(c.Request.Context(), email, string(hash))
+	user, err := h.users.Create(c.Request.Context(), email, string(hash), username, displayName)
 	if err != nil {
-		if errors.Is(err, domain.ErrEmailAlreadyExists) {
+		switch {
+		case errors.Is(err, domain.ErrEmailAlreadyExists):
 			c.JSON(http.StatusConflict, gin.H{"error": "email já cadastrado"})
-			return
+		case errors.Is(err, domain.ErrUsernameAlreadyExists):
+			c.JSON(http.StatusConflict, gin.H{"error": "username já cadastrado"})
+		default:
+			serverError(c, "create user", err, "falha ao criar usuário")
 		}
-		serverError(c, "create user", err, "falha ao criar usuário")
 		return
 	}
 

@@ -23,6 +23,8 @@ const AssetDetail = lazy(() => import('./pages/AssetDetail'))
 const AssetEdit = lazy(() => import('./pages/AssetEdit'))
 const MyStore = lazy(() => import('./pages/MyStore'))
 const Library = lazy(() => import('./pages/Library'))
+const ProfileMe = lazy(() => import('./pages/ProfileMe'))
+const UserProfile = lazy(() => import('./pages/UserProfile'))
 
 // Fallback minimalista enquanto o chunk da rota carrega. Vazio de
 // propósito: em rede normal o chunk vem em ~50-100ms e qualquer
@@ -110,6 +112,27 @@ export default function App() {
                   <Library />
                 </Suspense>
               </ProtectedRoute>
+            }
+          />
+          {/* /perfil/me: editar próprio perfil. Protegida porque
+              consome /users/me (precisa JWT). */}
+          <Route
+            path="/perfil/me"
+            element={
+              <ProtectedRoute>
+                <Suspense fallback={<RouteFallback />}>
+                  <ProfileMe />
+                </Suspense>
+              </ProtectedRoute>
+            }
+          />
+          {/* /u/:username: perfil PÚBLICO. Visível sem login. */}
+          <Route
+            path="/u/:username"
+            element={
+              <Suspense fallback={<RouteFallback />}>
+                <UserProfile />
+              </Suspense>
             }
           />
           {/* Catch-all: caminho desconhecido volta pra galeria. */}

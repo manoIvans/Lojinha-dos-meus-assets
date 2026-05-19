@@ -32,13 +32,22 @@ type Asset struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 
-	Tags          []string  `json:"tags"`
-	PriceCents    int64     `json:"price_cents"`
-	ThumbnailPath string    `json:"thumbnail_path"`
-	ModelPath     string    `json:"model_path"`
-	AuthorName    string    `json:"author_name,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	Tags          []string `json:"tags"`
+	PriceCents    int64    `json:"price_cents"`
+	ThumbnailPath string   `json:"thumbnail_path"`
+	ModelPath     string   `json:"model_path"`
+
+	// Campos de autor desnormalizados (vêm via JOIN no List/FindByID).
+	// AuthorName é o display_name; AuthorUsername alimenta o link pra
+	// /u/:username; AuthorAvatarPath é o caminho relativo do avatar
+	// (pode ser nil — usuário sem avatar). omitempty pra que Create
+	// (sem JOIN) não vaze campos zerados.
+	AuthorName       string  `json:"author_name,omitempty"`
+	AuthorUsername   string  `json:"author_username,omitempty"`
+	AuthorAvatarPath *string `json:"author_avatar_path,omitempty"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // TagCount é o par tag→quantidade-de-assets usado pela tela de

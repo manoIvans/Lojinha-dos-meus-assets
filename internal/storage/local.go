@@ -25,6 +25,7 @@ import (
 const (
 	MaxThumbnailBytes int64 = 5 << 20   //   5 MiB
 	MaxModelBytes     int64 = 100 << 20 // 100 MiB
+	MaxAvatarBytes    int64 = 2 << 20   //   2 MiB
 )
 
 // Subdiretórios fixos dentro do RootDir. Manter como constantes
@@ -33,6 +34,7 @@ const (
 const (
 	thumbnailSubdir = "thumbnails"
 	modelSubdir     = "models"
+	avatarSubdir    = "avatars"
 )
 
 // Extensões aceitas. Validamos por extensão (não MIME do header,
@@ -48,6 +50,14 @@ var (
 	allowedModelExts = map[string]struct{}{
 		".glb":  {},
 		".gltf": {},
+	}
+	// Avatares aceitam o mesmo conjunto de imagens das thumbnails —
+	// rasterizadas leves servem bem como foto de perfil.
+	allowedAvatarExts = map[string]struct{}{
+		".png":  {},
+		".jpg":  {},
+		".jpeg": {},
+		".webp": {},
 	}
 )
 
@@ -69,7 +79,7 @@ type LocalStorage struct {
 // aqui (no main) é melhor do que descobrir na primeira request que o
 // disco não permite escrita no diretório esperado.
 func NewLocalStorage(rootDir string) (*LocalStorage, error) {
-	for _, sub := range []string{thumbnailSubdir, modelSubdir} {
+	for _, sub := range []string{thumbnailSubdir, modelSubdir, avatarSubdir} {
 		full := filepath.Join(rootDir, sub)
 		if err := os.MkdirAll(full, 0o755); err != nil {
 			return nil, fmt.Errorf("criar diretório %q: %w", full, err)
@@ -94,6 +104,14 @@ func (s *LocalStorage) SaveThumbnail(fh *multipart.FileHeader) (string, error) {
 // SaveModel persiste o .glb/.gltf e devolve o caminho relativo.
 func (s *LocalStorage) SaveModel(fh *multipart.FileHeader) (string, error) {
 	return s.save(fh, modelSubdir, allowedModelExts, MaxModelBytes)
+}
+
+// SaveAvatar persiste o avatar e devolve o caminho relativo
+// (ex: "avatars/9f2c....png"). Limite de 2 MiB porque avatar é uma
+// imagem pequena exibida em chips/cards; aceitar 5 MiB como thumb
+// só desperdiçaria banda na maioria dos casos.
+func (s *LocalStorage) SaveAvatar(fh *multipart.FileHeader) (string, error) {
+	return s.save(fh, avatarSubdir, allowedAvatarExts, MaxAvatarBytes)
 }
 
 // Remove apaga um arquivo previamente salvo. Usado no rollback do

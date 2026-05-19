@@ -2,10 +2,12 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from 'react'
+import { api, type User } from '../api/client'
 import { decodeJwt } from './jwt'
 import { tokenStorage } from './tokenStorage'
 
@@ -16,8 +18,20 @@ type AuthState = {
   // autorização — só pra mostrar/esconder UI; o backend valida tudo.
   currentUserId: number | null
   isAuthenticated: boolean
+  // currentUser carrega o perfil completo (display_name, avatar_path,
+  // bio, email) buscado em GET /users/me sempre que o token muda.
+  // Pode ser null em 3 cenários:
+  //   1. Não autenticado.
+  //   2. Autenticado mas a request ainda está voando (loading).
+  //   3. Falhou (rede off, 401 → logout automático).
+  // O header lida com isso renderizando placeholder/skeleton.
+  currentUser: User | null
   login: (token: string) => void
   logout: () => void
+  // refreshUser força um GET /users/me. Útil depois de PATCH ou
+  // upload de avatar — quem chamou o mutation pode invalidar a
+  // cópia local de currentUser sem precisar fazer o fetch manual.
+  refreshUser: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthState | null>(null)
@@ -32,6 +46,7 @@ const AuthContext = createContext<AuthState | null>(null)
 // 401. Mantém a lógica em um lugar só.
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(() => tokenStorage.get())
+  const [currentUser, setCurrentUser] = useState<User | null>(null)
 
   const login = useCallback((newToken: string) => {
     tokenStorage.set(newToken)
@@ -41,7 +56,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => {
     tokenStorage.clear()
     setToken(null)
+    setCurrentUser(null)
   }, [])
+
+  // refreshUser: buscar /users/me. Stand-alone callback pra que outras
+  // partes da app possam disparar (após PATCH/upload). O effect abaixo
+  // chama isso quando o token muda.
+  const refreshUser = useCallback(async () => {
+    if (!tokenStorage.get()) {
+      setCurrentUser(null)
+      return
+    }
+    try {
+      const user = await api.get<User>('/api/v1/users/me')
+      setCurrentUser(user)
+    } catch {
+      // 401 (token expirado) → logout. Outros erros (rede off) só
+      // deixam currentUser null; o header vira placeholder. O próximo
+      // refresh tenta de novo.
+      setCurrentUser(null)
+    }
+  }, [])
+
+  // Carrega o perfil sempre que o token muda (login, logout, refresh
+  // da página com token salvo). Ignora a Promise resolvida — refreshUser
+  // já trata erros internamente.
+  useEffect(() => {
+    if (token === null) {
+      setCurrentUser(null)
+      return
+    }
+    void refreshUser()
+  }, [token, refreshUser])
 
   // currentUserId computado a partir do token. useMemo evita
   // re-decodificar a cada render quando o token não muda.
@@ -60,11 +106,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       token,
       currentUserId,
+      currentUser,
       isAuthenticated: token !== null,
       login,
       logout,
+      refreshUser,
     }),
-    [token, currentUserId, login, logout],
+    [token, currentUserId, currentUser, login, logout, refreshUser],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

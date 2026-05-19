@@ -1,6 +1,7 @@
 import { memo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { fileUrl, type Asset } from '../api/client'
+import Avatar from './Avatar'
 
 // Card de asset na vitrine. Agora é INTERATIVO: clicar leva pra
 // /asset/:id (página de detalhe com o viewer 3D). Por isso ganhou
@@ -74,9 +75,23 @@ function AssetCardImpl({ asset, priority = false }: Props) {
         >
           {asset.title}
         </h2>
-        <p className="text-xs">
-          por <span className="font-bold">{asset.author_name ?? 'anônimo'}</span>
-        </p>
+        {/* Avatar + nome do autor. Link explícito para /u/:username
+            seria HTML inválido aqui (anchor aninhada no Link do card),
+            então mantemos só o display — a navegação pro perfil é
+            feita pelo AssetDetail. */}
+        <div className="flex items-center gap-2">
+          <Avatar
+            avatarPath={asset.author_avatar_path}
+            name={asset.author_name ?? '?'}
+            size="xs"
+          />
+          <p className="text-xs truncate">
+            por{' '}
+            <span className="font-bold">
+              {asset.author_name ?? 'anônimo'}
+            </span>
+          </p>
+        </div>
         <p className="text-sm font-bold pt-1">
           ✦ {formatPrice(asset.price_cents)}
         </p>

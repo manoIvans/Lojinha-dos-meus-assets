@@ -31,7 +31,7 @@ func CORS(allowedOrigins []string) gin.HandlerFunc {
 	}
 
 	const (
-		allowMethods = "GET, POST, PUT, DELETE, OPTIONS"
+		allowMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 		allowHeaders = "Authorization, Content-Type"
 		maxAge       = "3600" // 1h — preflight em cache no navegador
 	)

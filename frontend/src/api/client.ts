@@ -39,6 +39,35 @@ export type TagCount = {
   count: number
 }
 
+// User é o shape COMPLETO (com email) devolvido em GET /users/me e
+// no objeto `user` da resposta de register. NUNCA chega pra terceiros
+// — o backend só responde isso pra rota autenticada do próprio dono.
+//
+// avatar_path é opcional + nullable: o backend devolve `null` quando
+// o usuário não tem avatar (e omite o campo se nem o User foi feito
+// JOIN). Tratar `null` e `undefined` no front como "sem avatar".
+export type User = {
+  id: number
+  email: string
+  username: string
+  display_name: string
+  bio: string
+  avatar_path?: string | null
+  created_at: string
+  updated_at: string
+}
+
+// PublicUser é o shape devolvido por GET /users/:username. Sem email,
+// sem updated_at — alimenta a página pública /u/:username.
+export type PublicUser = {
+  id: number
+  username: string
+  display_name: string
+  bio: string
+  avatar_path?: string | null
+  created_at: string
+}
+
 export type Asset = {
   id: number
   owner_id: number
@@ -48,7 +77,14 @@ export type Asset = {
   price_cents: number
   thumbnail_path: string
   model_path: string
+  // Campos desnormalizados do autor (via JOIN no backend).
+  // author_name = display_name; author_username permite link pra
+  // /u/:username; author_avatar_path null quando o autor não tem
+  // foto de perfil. Os 3 podem vir ausentes em respostas que não
+  // fazem JOIN (ex: Create).
   author_name?: string
+  author_username?: string
+  author_avatar_path?: string | null
   created_at: string
   updated_at: string
 }
@@ -119,6 +155,7 @@ export const api = {
   get: <T>(path: string) => request<T>('GET', path),
   post: <T>(path: string, body?: RequestBody) => request<T>('POST', path, body),
   put: <T>(path: string, body?: RequestBody) => request<T>('PUT', path, body),
+  patch: <T>(path: string, body?: RequestBody) => request<T>('PATCH', path, body),
   delete: <T>(path: string) => request<T>('DELETE', path),
 }
 

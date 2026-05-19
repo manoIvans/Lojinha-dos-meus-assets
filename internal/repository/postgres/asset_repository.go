@@ -4,13 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/manoIvans/lojinha-assets/internal/domain"
 )
+
+// assetAuthorColumns são as colunas que vêm do JOIN em users e
+// alimentam os campos AuthorName/AuthorUsername/AuthorAvatarPath
+// do domain.Asset. Centralizado pra não desincronizar entre as 3
+// queries (FindByID/List/ListByOwner) que fazem o JOIN.
+const assetAuthorColumns = "u.display_name, u.username, u.avatar_path"
 
 // AssetRepository encapsula o acesso à tabela `assets`. Mesma forma
 // que UserRepository: o handler depende de uma interface pequena
@@ -62,25 +67,28 @@ func (r *AssetRepository) Create(ctx context.Context, ownerID int64, title, desc
 	return a, nil
 }
 
-// FindByID retorna um único asset com o nome do autor já populado
-// via JOIN. ErrAssetNotFound se o ID não existe — o handler converte
-// para 404. Mesma estratégia do List: JOIN inner porque a FK tem ON
-// DELETE CASCADE (não existe asset órfão).
+// FindByID retorna um único asset com os campos de autor já populados
+// via JOIN (display_name, username, avatar_path). ErrAssetNotFound se
+// o ID não existe — o handler converte para 404.
+//
+// O JOIN é INNER porque a FK assets.owner_id -> users(id) tem ON
+// DELETE CASCADE: se o user some, os assets dele somem junto, então
+// nunca temos asset órfão para um LEFT JOIN proteger.
 func (r *AssetRepository) FindByID(ctx context.Context, id int64) (*domain.Asset, error) {
 	const q = `
 		SELECT a.id, a.owner_id, a.title, a.description, a.tags,
 		       a.price_cents, a.thumbnail_path, a.model_path,
-		       a.created_at, a.updated_at, u.email
+		       a.created_at, a.updated_at, ` + assetAuthorColumns + `
 		  FROM assets a
 		  JOIN users u ON u.id = a.owner_id
 		 WHERE a.id = $1`
 
 	a := &domain.Asset{}
-	var email string
 	err := r.db.QueryRow(ctx, q, id).Scan(
 		&a.ID, &a.OwnerID, &a.Title, &a.Description, &a.Tags,
 		&a.PriceCents, &a.ThumbnailPath, &a.ModelPath,
-		&a.CreatedAt, &a.UpdatedAt, &email,
+		&a.CreatedAt, &a.UpdatedAt,
+		&a.AuthorName, &a.AuthorUsername, &a.AuthorAvatarPath,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -88,23 +96,18 @@ func (r *AssetRepository) FindByID(ctx context.Context, id int64) (*domain.Asset
 		}
 		return nil, fmt.Errorf("select asset by id: %w", err)
 	}
-	a.AuthorName = authorNameFromEmail(email)
 	return a, nil
 }
 
 // List devolve todos os assets ordenados do mais recente para o mais
-// antigo, com o email do autor já incluído via JOIN. Sem paginação
+// antigo, com os campos de autor já populados via JOIN. Sem paginação
 // por enquanto — quando o catálogo crescer, trocar essa assinatura
 // por (limit, offset) ou cursor é o primeiro passo.
-//
-// O JOIN é INNER porque a FK assets.owner_id -> users(id) tem ON
-// DELETE CASCADE: se o user some, os assets dele somem junto, então
-// nunca temos asset órfão para um LEFT JOIN proteger.
 func (r *AssetRepository) List(ctx context.Context) ([]*domain.Asset, error) {
 	const q = `
 		SELECT a.id, a.owner_id, a.title, a.description, a.tags,
 		       a.price_cents, a.thumbnail_path, a.model_path,
-		       a.created_at, a.updated_at, u.email
+		       a.created_at, a.updated_at, ` + assetAuthorColumns + `
 		  FROM assets a
 		  JOIN users u ON u.id = a.owner_id
 		 ORDER BY a.created_at DESC`
@@ -121,15 +124,14 @@ func (r *AssetRepository) List(ctx context.Context) ([]*domain.Asset, error) {
 	assets := make([]*domain.Asset, 0)
 	for rows.Next() {
 		a := &domain.Asset{}
-		var email string
 		if err := rows.Scan(
 			&a.ID, &a.OwnerID, &a.Title, &a.Description, &a.Tags,
 			&a.PriceCents, &a.ThumbnailPath, &a.ModelPath,
-			&a.CreatedAt, &a.UpdatedAt, &email,
+			&a.CreatedAt, &a.UpdatedAt,
+			&a.AuthorName, &a.AuthorUsername, &a.AuthorAvatarPath,
 		); err != nil {
 			return nil, fmt.Errorf("scan asset row: %w", err)
 		}
-		a.AuthorName = authorNameFromEmail(email)
 		assets = append(assets, a)
 	}
 	if err := rows.Err(); err != nil {
@@ -140,16 +142,12 @@ func (r *AssetRepository) List(ctx context.Context) ([]*domain.Asset, error) {
 
 // ListByOwner é o gêmeo "privado" de List: mesmo shape de retorno,
 // mas filtrando WHERE owner_id = $1. Serve a tela "Minha Loja" do
-// frontend, onde o usuário gerencia só os assets dele.
-//
-// Mantemos o mesmo JOIN com users porque o front consome o tipo
-// Asset uniforme (com author_name) — separar essa query num shape
-// próprio só pra economizar uma coluna não compensa a duplicação.
+// frontend e a "Assets deste usuário" no perfil público /u/:username.
 func (r *AssetRepository) ListByOwner(ctx context.Context, ownerID int64) ([]*domain.Asset, error) {
 	const q = `
 		SELECT a.id, a.owner_id, a.title, a.description, a.tags,
 		       a.price_cents, a.thumbnail_path, a.model_path,
-		       a.created_at, a.updated_at, u.email
+		       a.created_at, a.updated_at, ` + assetAuthorColumns + `
 		  FROM assets a
 		  JOIN users u ON u.id = a.owner_id
 		 WHERE a.owner_id = $1
@@ -164,15 +162,14 @@ func (r *AssetRepository) ListByOwner(ctx context.Context, ownerID int64) ([]*do
 	assets := make([]*domain.Asset, 0)
 	for rows.Next() {
 		a := &domain.Asset{}
-		var email string
 		if err := rows.Scan(
 			&a.ID, &a.OwnerID, &a.Title, &a.Description, &a.Tags,
 			&a.PriceCents, &a.ThumbnailPath, &a.ModelPath,
-			&a.CreatedAt, &a.UpdatedAt, &email,
+			&a.CreatedAt, &a.UpdatedAt,
+			&a.AuthorName, &a.AuthorUsername, &a.AuthorAvatarPath,
 		); err != nil {
 			return nil, fmt.Errorf("scan asset row: %w", err)
 		}
-		a.AuthorName = authorNameFromEmail(email)
 		assets = append(assets, a)
 	}
 	if err := rows.Err(); err != nil {
@@ -218,20 +215,6 @@ func (r *AssetRepository) ListTagsWithCounts(ctx context.Context) ([]*domain.Tag
 		return nil, fmt.Errorf("iterate tag rows: %w", err)
 	}
 	return out, nil
-}
-
-// authorNameFromEmail extrai a parte antes do @ para usar como nome
-// de exibição. Reduz vazamento de email completo no catálogo público
-// (alguém ainda pode adivinhar o domínio, mas pelo menos a galeria
-// não vira uma lista enumerável de contas).
-//
-// Quando o User ganhar um campo display_name próprio, troca-se isso
-// pelo campo dedicado e essa função some.
-func authorNameFromEmail(email string) string {
-	if i := strings.Index(email, "@"); i > 0 {
-		return email[:i]
-	}
-	return email
 }
 
 // Update aplica uma edição completa (PUT, não PATCH) e devolve o

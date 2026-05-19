@@ -1,5 +1,6 @@
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import Avatar from './Avatar'
 
 // Shell de todas as páginas. A combinação bg-parchment + text-ink +
 // font-mono é aplicada no root para que TODA descendência herde a
@@ -26,7 +27,7 @@ function navLinkClasses({ isActive }: { isActive: boolean }) {
 }
 
 export default function Layout() {
-  const { isAuthenticated, logout } = useAuth()
+  const { isAuthenticated, currentUser, logout } = useAuth()
   const navigate = useNavigate()
 
   function handleLogout() {
@@ -85,23 +86,46 @@ export default function Layout() {
             </>
           )}
 
-          {/* Ação de auth alinhada à direita. Estilizada como pílula
-              bordada (border-2 em parchment) que inverte cores no
-              hover — destaca a ação principal sem ficar pesada como
-              um botão pixel completo (que dominaria a navbar). */}
-          <div className="ml-auto">
+          {/* Bloco de identidade à direita: quando logado, mostra
+              avatar+nome (linka pra /perfil/me) e botão Sair. Quando
+              deslogado, só o botão Entrar.
+
+              currentUser pode estar null mesmo com isAuthenticated=true
+              num breve intervalo entre login e a primeira request de
+              /users/me terminar — nesse caso, escondemos só o nome e
+              o avatar fica como fallback "?", evitando layout shift. */}
+          <div className="ml-auto flex items-center gap-3">
             {isAuthenticated ? (
-              <button
-                onClick={handleLogout}
-                className="
-                  inline-block px-3 py-1.5 text-xs uppercase tracking-widest font-bold
-                  border-2 border-parchment text-parchment
-                  transition-colors duration-75
-                  hover:bg-parchment hover:text-arcane
-                "
-              >
-                ▶ Sair
-              </button>
+              <>
+                <Link
+                  to="/perfil/me"
+                  aria-label="Meu perfil"
+                  className="group flex items-center gap-2"
+                >
+                  <Avatar
+                    avatarPath={currentUser?.avatar_path}
+                    name={currentUser?.display_name ?? '?'}
+                    size="sm"
+                    interactive
+                  />
+                  {/* Nome aparece só em telas médias+ pra economizar
+                      espaço no mobile (o avatar já é o anchor visual). */}
+                  <span className="hidden sm:inline text-xs uppercase tracking-widest font-bold group-hover:underline underline-offset-4 decoration-2">
+                    {currentUser?.display_name ?? '...'}
+                  </span>
+                </Link>
+                <button
+                  onClick={handleLogout}
+                  className="
+                    inline-block px-3 py-1.5 text-xs uppercase tracking-widest font-bold
+                    border-2 border-parchment text-parchment
+                    transition-colors duration-75
+                    hover:bg-parchment hover:text-arcane
+                  "
+                >
+                  ▶ Sair
+                </button>
+              </>
             ) : (
               <NavLink
                 to="/login"

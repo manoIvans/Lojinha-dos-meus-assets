@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ApiError, api, fileUrl, type Asset } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
+import Avatar from '../components/Avatar'
 import { useToast } from '../components/Toast'
 import ModelViewer from '../components/ModelViewer'
 
@@ -109,21 +110,38 @@ function Detail({ asset }: { asset: Asset }) {
         <p className="bg-arcane text-parchment font-pixel text-xs uppercase border-b-4 border-ink px-4 py-3">
           ▶ Asset #{asset.id}
         </p>
-        <div className="px-6 py-5 space-y-2">
+        <div className="px-6 py-5 space-y-3">
           <h1 className="text-2xl md:text-3xl font-bold uppercase tracking-wider break-words leading-tight">
             {asset.title}
           </h1>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs uppercase tracking-widest">
-            <span>
-              por{' '}
-              <span className="font-bold">
-                {asset.author_name ?? 'anônimo'}
+          {/* Linha do autor com avatar + link clicável pro perfil
+              público. Quando author_username está presente (sempre,
+              em respostas com JOIN), vira <Link>; quando ausente
+              (legacy/edge case), fica só texto. */}
+          <div className="flex flex-wrap items-center gap-3">
+            <Avatar
+              avatarPath={asset.author_avatar_path}
+              name={asset.author_name ?? '?'}
+              size="sm"
+            />
+            <div className="text-xs uppercase tracking-widest flex flex-wrap items-center gap-x-3 gap-y-1">
+              {asset.author_username ? (
+                <Link
+                  to={`/u/${asset.author_username}`}
+                  className="font-bold hover:underline underline-offset-4 decoration-2 hover:text-arcane"
+                >
+                  {asset.author_name ?? asset.author_username}
+                </Link>
+              ) : (
+                <span className="font-bold">
+                  {asset.author_name ?? 'anônimo'}
+                </span>
+              )}
+              <span aria-hidden="true" className="text-ink/30">
+                │
               </span>
-            </span>
-            <span aria-hidden="true" className="text-ink/30">
-              │
-            </span>
-            <span>{formatDate(asset.created_at)}</span>
+              <span>{formatDate(asset.created_at)}</span>
+            </div>
           </div>
         </div>
       </header>

@@ -44,6 +44,7 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStor
 
 	userRepo := postgres.NewUserRepository(db)
 	authHandler := handler.NewAuthHandler(userRepo, tm)
+	userHandler := handler.NewUserHandler(userRepo, files)
 
 	assetRepo := postgres.NewAssetRepository(db)
 	assetHandler := handler.NewAssetHandler(assetRepo, files)
@@ -61,6 +62,9 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStor
 		// porque o catálogo é público — não vaza nada novo.
 		api.GET("/tags", assetHandler.Tags)
 
+		// Perfil público por username. Devolve PublicUser (sem email).
+		api.GET("/users/:username", userHandler.GetByUsername)
+
 		// Rotas protegidas: tudo dentro deste grupo exige um JWT
 		// válido. O middleware popula o userID no contexto, que os
 		// handlers leem para saber quem é o autor da request.
@@ -76,6 +80,16 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStor
 			// pela identidade do JWT — quando vier /my/library,
 			// /my/orders, etc, ficam todos juntos sob o mesmo prefixo.
 			protected.GET("/my/assets", assetHandler.MyAssets)
+
+			// Perfil próprio: GET retorna a versão completa (com email),
+			// PATCH edita display_name/bio, POST/DELETE /avatar trocam
+			// ou removem a foto. Username e email NÃO entram aqui —
+			// mudar exige fluxos próprios (re-verificação de email,
+			// redirect dos /u/:username antigos).
+			protected.GET("/users/me", userHandler.GetMe)
+			protected.PATCH("/users/me", userHandler.UpdateMe)
+			protected.POST("/users/me/avatar", userHandler.UploadAvatar)
+			protected.DELETE("/users/me/avatar", userHandler.DeleteAvatar)
 		}
 	}
 
