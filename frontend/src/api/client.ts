@@ -32,6 +32,13 @@ export class ApiError extends Error {
 //
 // tags substituiu category (migration 004) — agora multi-valor.
 // Sempre array não-nulo (default '{}' no schema).
+// TagCount é o par tag→quantidade-de-assets devolvido por GET /tags.
+// Usado pela galeria pra mostrar "fantasia (12)" no chip do filtro.
+export type TagCount = {
+  tag: string
+  count: number
+}
+
 export type Asset = {
   id: number
   owner_id: number

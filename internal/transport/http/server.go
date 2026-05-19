@@ -57,6 +57,9 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStor
 		// ver detalhes. Mantemos FORA do grupo protegido de propósito.
 		api.GET("/assets", assetHandler.List)
 		api.GET("/assets/:id", assetHandler.GetByID)
+		// /tags devolve [{tag, count}] do catálogo inteiro. Público
+		// porque o catálogo é público — não vaza nada novo.
+		api.GET("/tags", assetHandler.Tags)
 
 		// Rotas protegidas: tudo dentro deste grupo exige um JWT
 		// válido. O middleware popula o userID no contexto, que os

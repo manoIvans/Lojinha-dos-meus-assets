@@ -27,23 +27,25 @@ var ErrAssetForbidden = errors.New("operação não permitida neste asset")
 // de float em dinheiro. Conversão para "R$ 12,34" é responsabilidade
 // da camada de apresentação.
 type Asset struct {
-	ID          int64    `json:"id"`
-	OwnerID     int64    `json:"owner_id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	// Tags substitui a antiga `Category string` (migração 004): permite
-	// múltiplas classificações por asset. Persistida como text[] no
-	// Postgres; serializada como array JSON. Sempre não-nula (default
-	// é array vazio no schema).
+	ID          int64  `json:"id"`
+	OwnerID     int64  `json:"owner_id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+
 	Tags          []string  `json:"tags"`
 	PriceCents    int64     `json:"price_cents"`
 	ThumbnailPath string    `json:"thumbnail_path"`
 	ModelPath     string    `json:"model_path"`
-	// AuthorName é populado APENAS no List (com JOIN em users) para a
-	// vitrine pública. omitempty mantém o JSON limpo nos endpoints que
-	// não fazem o JOIN (FindByID, Create, Update). Quando outro consumer
-	// precisar dele, basta repetir o JOIN no SELECT correspondente.
-	AuthorName string    `json:"author_name,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	AuthorName    string    `json:"author_name,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// TagCount é o par tag→quantidade-de-assets usado pela tela de
+// filtros: a galeria mostra "fantasia (12)" no chip. Devolvido pelo
+// endpoint GET /api/v1/tags. Computado via unnest(tags) + GROUP BY
+// no Postgres — não é só derivar de Asset.Tags em Go.
+type TagCount struct {
+	Tag   string `json:"tag"`
+	Count int64  `json:"count"`
 }

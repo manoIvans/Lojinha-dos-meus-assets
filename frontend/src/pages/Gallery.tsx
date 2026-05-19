@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api, type Asset } from '../api/client'
+import { api, type Asset, type TagCount } from '../api/client'
 import AssetCard from '../components/AssetCard'
 import AssetCardSkeleton from '../components/AssetCardSkeleton'
 
@@ -32,6 +32,10 @@ const PRIORITY_COUNT = 4
 
 export default function Gallery() {
   const [assets, setAssets] = useState<Asset[] | null>(null)
+  // tagCounts vem de GET /api/v1/tags (já ordenado por count desc).
+  // Buscado em paralelo com /assets pra não serializar dois requests.
+  // null = ainda carregando; [] = sem tags (catálogo vazio).
+  const [tagCounts, setTagCounts] = useState<TagCount[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   // selectedTag = null → mostra todos; string → filtra por essa tag.
   // Estado de filtro fica APENAS no client (não persiste em URL nem
@@ -42,12 +46,21 @@ export default function Gallery() {
   const load = useCallback(() => {
     setError(null)
     setAssets(null)
+    setTagCounts(null)
     let cancelled = false
 
-    api
-      .get<Asset[]>('/api/v1/assets')
-      .then((data) => {
-        if (!cancelled) setAssets(data)
+    // Promise.all dispara os dois GETs em paralelo. Se UM falhar
+    // (rede caiu, 5xx), entramos no error genérico — a galeria sem
+    // tags é mais útil que a galeria sem nada, mas o front trata
+    // "falha de carga total" como um único estado pra simplificar.
+    Promise.all([
+      api.get<Asset[]>('/api/v1/assets'),
+      api.get<TagCount[]>('/api/v1/tags'),
+    ])
+      .then(([assetsData, tagsData]) => {
+        if (cancelled) return
+        setAssets(assetsData)
+        setTagCounts(tagsData)
       })
       .catch(() => {
         if (!cancelled) setError('Falha ao carregar a galeria.')
@@ -63,19 +76,10 @@ export default function Gallery() {
     return cancel
   }, [load])
 
-  // allTags: união de todas as tags presentes nos assets carregados,
-  // deduplicada e ordenada alfabeticamente. Derivado via useMemo —
-  // só recalcula quando `assets` muda. Para catálogos grandes o
-  // ideal seria um endpoint dedicado (/api/v1/tags) mas com o volume
-  // atual, derivar do List é trivial.
-  const allTags = useMemo<string[]>(() => {
-    if (!assets) return []
-    const set = new Set<string>()
-    for (const a of assets) {
-      for (const t of a.tags) set.add(t)
-    }
-    return [...set].sort((a, b) => a.localeCompare(b))
-  }, [assets])
+  // tags computed: ordem do backend (count desc, tag asc no empate).
+  // Antes derivávamos do `assets` carregado; agora o backend é a fonte
+  // de verdade — o front não precisa contar nada.
+  const tags = useMemo<TagCount[]>(() => tagCounts ?? [], [tagCounts])
 
   // filteredAssets: aplica o filtro selectedTag SE houver. Sem filtro,
   // mostra tudo. Derivado também (useMemo) pra evitar re-filtrar
@@ -88,12 +92,16 @@ export default function Gallery() {
 
   // Se o usuário tinha um filtro ativo e o asset com essa tag foi
   // deletado (ou refresh trouxe lista sem ela), limpa o filtro pra
-  // evitar mostrar empty state confuso. Roda só quando allTags muda.
+  // evitar mostrar empty state confuso. Roda só quando tags muda.
   useEffect(() => {
-    if (selectedTag && allTags.length > 0 && !allTags.includes(selectedTag)) {
+    if (
+      selectedTag &&
+      tags.length > 0 &&
+      !tags.some((t) => t.tag === selectedTag)
+    ) {
       setSelectedTag(null)
     }
-  }, [allTags, selectedTag])
+  }, [tags, selectedTag])
 
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-6">
@@ -105,9 +113,9 @@ export default function Gallery() {
       />
       {/* TagFilter só aparece quando temos assets e há tags pra escolher.
           Esconder em loading/erro/vazio evita botões fantasmas. */}
-      {assets && allTags.length > 0 && (
+      {assets && tags.length > 0 && (
         <TagFilter
-          tags={allTags}
+          tags={tags}
           selected={selectedTag}
           onSelect={setSelectedTag}
         />
@@ -178,15 +186,23 @@ function subtitle(
 // TagFilter: linha de chips horizontais com flex-wrap. Cada chip é
 // um botão pixel-art; o ativo recebe cores invertidas (bg-arcane).
 // Chip "Todos" no início serve como reset do filtro.
+//
+// A contagem aparece com cor reduzida (text-X/60) e fonte um pouco
+// menor — afirma a info sem competir com a tag em si.
 function TagFilter({
   tags,
   selected,
   onSelect,
 }: {
-  tags: string[]
+  tags: TagCount[]
   selected: string | null
   onSelect: (tag: string | null) => void
 }) {
+  // Total = soma de todas as ocorrências de tag no catálogo, NÃO o
+  // número de assets distintos (um asset com 3 tags conta 3x). Pra
+  // UX do filtro "Todos", o valor é o melhor proxy disponível sem
+  // outra request.
+  const total = tags.reduce((acc, t) => acc + t.count, 0)
   return (
     <div
       role="toolbar"
@@ -194,15 +210,15 @@ function TagFilter({
       className="bg-parchment border-4 border-ink shadow-pixel p-3 flex flex-wrap gap-2"
     >
       <Chip active={selected === null} onClick={() => onSelect(null)}>
-        Todos
+        Todos <span className="opacity-60">({total})</span>
       </Chip>
-      {tags.map((tag) => (
+      {tags.map(({ tag, count }) => (
         <Chip
           key={tag}
           active={selected === tag}
           onClick={() => onSelect(tag)}
         >
-          {tag}
+          {tag} <span className="opacity-60">({count})</span>
         </Chip>
       ))}
     </div>

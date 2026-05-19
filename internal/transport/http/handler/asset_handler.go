@@ -30,6 +30,7 @@ type assetRepository interface {
 	// Delete devolve os caminhos relativos dos arquivos físicos do
 	// asset deletado, pra que o handler possa removê-los do disco.
 	Delete(ctx context.Context, id, ownerID int64) (thumbnailPath, modelPath string, err error)
+	ListTagsWithCounts(ctx context.Context) ([]*domain.TagCount, error)
 }
 
 // fileStorage abstrai o backend de arquivos. Mesma motivação da
@@ -275,6 +276,19 @@ func (h *AssetHandler) List(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, assets)
+}
+
+// Tags é PÚBLICA — qualquer um pode ver a distribuição de tags. Não
+// vaza dado privado: o catálogo já é público. Resposta é ordenada
+// por popularidade (count desc) para que o frontend possa renderizar
+// chips na mesma ordem sem precisar reordenar.
+func (h *AssetHandler) Tags(c *gin.Context) {
+	tags, err := h.assets.ListTagsWithCounts(c.Request.Context())
+	if err != nil {
+		serverError(c, "list tags", err, "falha ao listar tags")
+		return
+	}
+	c.JSON(http.StatusOK, tags)
 }
 
 // MyAssets é o List filtrado pelo dono autenticado. Rota dedicada

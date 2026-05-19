@@ -181,6 +181,45 @@ func (r *AssetRepository) ListByOwner(ctx context.Context, ownerID int64) ([]*do
 	return assets, nil
 }
 
+// ListTagsWithCounts devolve cada tag distinta com a quantidade de
+// assets que a possuem. Usado pelo chip bar da galeria pra mostrar
+// "fantasia (12)" sem o frontend precisar baixar todos os assets só
+// pra contar.
+//
+// `unnest` "explode" o array tags em uma linha por elemento, e o
+// GROUP BY agrupa. O ORDER BY count desc + tag asc tabula primeiro
+// pelas mais populares, depois alfabeticamente quando empata —
+// importante quando o catálogo cresce e o usuário escaneia visualmente.
+//
+// Mantemos PÚBLICO (caller decide se precisa auth) e SEM paginação:
+// o número de tags distintas é trivial mesmo com milhares de assets.
+func (r *AssetRepository) ListTagsWithCounts(ctx context.Context) ([]*domain.TagCount, error) {
+	const q = `
+		SELECT tag, COUNT(*) AS n
+		  FROM (SELECT unnest(tags) AS tag FROM assets) sub
+		 GROUP BY tag
+		 ORDER BY n DESC, tag ASC`
+
+	rows, err := r.db.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("select tag counts: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]*domain.TagCount, 0)
+	for rows.Next() {
+		tc := &domain.TagCount{}
+		if err := rows.Scan(&tc.Tag, &tc.Count); err != nil {
+			return nil, fmt.Errorf("scan tag row: %w", err)
+		}
+		out = append(out, tc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tag rows: %w", err)
+	}
+	return out, nil
+}
+
 // authorNameFromEmail extrai a parte antes do @ para usar como nome
 // de exibição. Reduz vazamento de email completo no catálogo público
 // (alguém ainda pode adivinhar o domínio, mas pelo menos a galeria
