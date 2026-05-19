@@ -1,10 +1,12 @@
 import {
   Suspense,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
   type ComponentRef,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
 import { Canvas } from '@react-three/fiber'
 import {
@@ -20,10 +22,20 @@ import type { Material, Mesh } from 'three'
 // ModelViewer: container 3D com toggles de inspeção.
 //
 // Controles sobrepostos (overlay) no canto superior direito:
+//   - Fullscreen: usa Fullscreen API (requestFullscreen no container).
+//     Esc nativo do browser sai; o botão alterna manualmente.
 //   - Wireframe: traverse na cena e seta material.wireframe em cada
 //     mesh. Permite inspecionar a retopologia.
 //   - Resetar câmera: chama OrbitControls.reset() pra voltar à pose
 //     inicial (position=[3,3,3] olhando pra origem).
+//
+// Atalhos de teclado (quando o viewer tem foco — tabIndex=0):
+//   F → fullscreen on/off
+//   W → wireframe on/off
+//   R → reset camera
+// Foco visual via outline arcane pra deixar claro que o viewer
+// está escutando teclado. Globais NÃO — isso conflitaria com os
+// outros componentes da app.
 //
 // Geometria/iluminação inalteradas em relação à versão anterior:
 //   Environment 'city' (IBL/PBR), ContactShadows no chão, key light
@@ -49,17 +61,95 @@ const OVERLAY_BTN =
 
 export default function ModelViewer({ modelUrl, className }: Props) {
   const [isWireframe, setIsWireframe] = useState(false)
+  const [isFullscreen, setIsFullscreen] = useState(false)
   const controlsRef = useRef<ControlsRef>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
 
   // OrbitControls.reset() restaura a câmera ao "saved state". O drei
   // captura esse state automaticamente na primeira renderização — não
   // precisamos chamar saveState() manualmente.
-  function resetCamera() {
+  const resetCamera = useCallback(() => {
     controlsRef.current?.reset()
-  }
+  }, [])
+
+  const toggleWireframe = useCallback(() => {
+    setIsWireframe((v) => !v)
+  }, [])
+
+  // toggleFullscreen: requestFullscreen no container (não no Canvas)
+  // pra que o overlay de botões ENTRE em fullscreen junto. Caso
+  // contrário só a viewport 3D ficaria, e o usuário perderia os
+  // controles. A Fullscreen API só funciona em resposta a interação
+  // direta (gesture user) — clicar no botão satisfaz isso.
+  const toggleFullscreen = useCallback(() => {
+    const el = containerRef.current
+    if (!el) return
+    if (document.fullscreenElement === el) {
+      document.exitFullscreen().catch(() => {
+        // Esc nativo do browser pode ter saído antes — ignorar.
+      })
+    } else {
+      el.requestFullscreen().catch(() => {
+        // iOS Safari (até v16.3) só implementa em <video>. Em desktop
+        // raramente falha; quando falhar (ex: permissão negada), a
+        // UX é o botão "não funcionar" — sem toast porque não há
+        // como o usuário corrigir e seria barulho.
+      })
+    }
+  }, [])
+
+  // Mantém isFullscreen em sincronia com o estado real do browser.
+  // Necessário porque o usuário pode sair via Esc (sem clicar no botão).
+  useEffect(() => {
+    function handleChange() {
+      setIsFullscreen(document.fullscreenElement === containerRef.current)
+    }
+    document.addEventListener('fullscreenchange', handleChange)
+    return () => document.removeEventListener('fullscreenchange', handleChange)
+  }, [])
+
+  // Atalhos de teclado: F/W/R quando o viewer tem foco. Ignorar
+  // modificadores (Ctrl/Meta/Alt) — Ctrl+F é busca do browser, Alt+W
+  // pode ser atalho de janela. preventDefault evita comportamento
+  // padrão (rolagem com espaço, etc).
+  const handleKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const key = e.key.toLowerCase()
+      switch (key) {
+        case 'f':
+          e.preventDefault()
+          toggleFullscreen()
+          break
+        case 'w':
+          e.preventDefault()
+          toggleWireframe()
+          break
+        case 'r':
+          e.preventDefault()
+          resetCamera()
+          break
+      }
+    },
+    [toggleFullscreen, toggleWireframe, resetCamera],
+  )
 
   return (
-    <div className={`relative ${className ?? ''}`}>
+    <div
+      ref={containerRef}
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      // Em fullscreen o container vira preto cobrindo tudo — sem isso,
+      // o aspect-square original deixaria letterboxes desproporcionais
+      // em monitores wide. bg-twilight harmoniza com a app caso o
+      // fundo apareça em ratios estranhos.
+      className={`
+        relative outline-none
+        focus-visible:ring-4 focus-visible:ring-arcane focus-visible:ring-inset
+        ${isFullscreen ? 'bg-twilight !aspect-auto w-screen h-screen' : ''}
+        ${className ?? ''}
+      `}
+    >
       <Canvas
         shadows
         camera={{ position: [3, 3, 3], fov: 50 }}
@@ -111,25 +201,51 @@ export default function ModelViewer({ modelUrl, className }: Props) {
       <div className="absolute top-3 right-3 flex flex-col gap-2 pointer-events-none">
         <button
           type="button"
-          onClick={() => setIsWireframe((v) => !v)}
+          onClick={toggleFullscreen}
+          aria-pressed={isFullscreen}
+          title="Fullscreen (F)"
+          className={`${OVERLAY_BTN} ${
+            isFullscreen
+              ? 'bg-ink text-parchment'
+              : 'bg-parchment text-ink'
+          }`}
+        >
+          {isFullscreen ? '✕' : '⛶'} Fullscreen <Kbd>F</Kbd>
+        </button>
+        <button
+          type="button"
+          onClick={toggleWireframe}
           aria-pressed={isWireframe}
+          title="Wireframe (W)"
           className={`${OVERLAY_BTN} ${
             isWireframe
               ? 'bg-ink text-parchment'
               : 'bg-parchment text-ink'
           }`}
         >
-          {isWireframe ? '◼' : '◻'} Wireframe
+          {isWireframe ? '◼' : '◻'} Wireframe <Kbd>W</Kbd>
         </button>
         <button
           type="button"
           onClick={resetCamera}
+          title="Resetar câmera (R)"
           className={`${OVERLAY_BTN} bg-parchment text-ink`}
         >
-          ↺ Resetar
+          ↺ Resetar <Kbd>R</Kbd>
         </button>
       </div>
     </div>
+  )
+}
+
+// Kbd: badge minimalista com a tecla do atalho. Borda fina em
+// currentColor + opacity-70 mantém o badge legível mas subordinado
+// ao texto principal. opacity-70 propaga via inheritance pro border.
+function Kbd({ children }: { children: string }) {
+  return (
+    <span className="ml-1 inline-block border border-current px-1 text-[9px] opacity-70">
+      {children}
+    </span>
   )
 }
 

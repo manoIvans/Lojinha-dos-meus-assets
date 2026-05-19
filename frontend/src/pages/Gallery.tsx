@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api, type Asset, type TagCount } from '../api/client'
 import AssetCard from '../components/AssetCard'
 import AssetCardSkeleton from '../components/AssetCardSkeleton'
@@ -37,11 +38,38 @@ export default function Gallery() {
   // null = ainda carregando; [] = sem tags (catálogo vazio).
   const [tagCounts, setTagCounts] = useState<TagCount[] | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // selectedTag = null → mostra todos; string → filtra por essa tag.
-  // Estado de filtro fica APENAS no client (não persiste em URL nem
-  // localStorage por ora — pra MVP é suficiente). Quando virar tela
-  // compartilhável (linkar /?tag=fantasia), promover pra search param.
-  const [selectedTag, setSelectedTag] = useState<string | null>(null)
+  // selectedTag vive em ?tag=X na URL — useSearchParams é a fonte da
+  // verdade. Benefícios:
+  //   - Linkável: /?tag=fantasia abre filtrado.
+  //   - Browser back: volta pra "sem filtro" depois de selecionar.
+  //   - Refresh preserva o filtro.
+  //
+  // searchParams.get retorna null quando não há ?tag — caso "Todos".
+  const [searchParams, setSearchParams] = useSearchParams()
+  const selectedTag = searchParams.get('tag')
+
+  // setSelectedTag empacota a manipulação de search params. Recebe
+  // null pra limpar (chip "Todos") ou string pra filtrar. push=true
+  // é o default (clique do usuário → nova entrada no histórico);
+  // push=false é usado pelo auto-clear (não polui o histórico com
+  // navegações automáticas).
+  const setSelectedTag = useCallback(
+    (tag: string | null, push = true) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          if (tag === null) {
+            next.delete('tag')
+          } else {
+            next.set('tag', tag)
+          }
+          return next
+        },
+        { replace: !push },
+      )
+    },
+    [setSearchParams],
+  )
 
   const load = useCallback(() => {
     setError(null)
@@ -90,18 +118,20 @@ export default function Gallery() {
     return assets.filter((a) => a.tags.includes(selectedTag))
   }, [assets, selectedTag])
 
-  // Se o usuário tinha um filtro ativo e o asset com essa tag foi
-  // deletado (ou refresh trouxe lista sem ela), limpa o filtro pra
-  // evitar mostrar empty state confuso. Roda só quando tags muda.
+  // Se o usuário tinha um filtro ativo e a tag não existe mais (asset
+  // deletado, refresh trouxe lista sem ela) OU o usuário digitou
+  // ?tag=naoexiste manualmente — limpa o filtro pra evitar empty
+  // state confuso. push=false para não poluir o histórico com a
+  // correção automática.
   useEffect(() => {
     if (
       selectedTag &&
       tags.length > 0 &&
       !tags.some((t) => t.tag === selectedTag)
     ) {
-      setSelectedTag(null)
+      setSelectedTag(null, false)
     }
-  }, [tags, selectedTag])
+  }, [tags, selectedTag, setSelectedTag])
 
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-6">
