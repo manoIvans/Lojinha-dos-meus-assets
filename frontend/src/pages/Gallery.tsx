@@ -366,6 +366,29 @@ function Hero({
   loading: boolean
   onQueryChange: (q: string) => void
 }) {
+  // Debounce do input de busca:
+  //   1. State local `localQuery` mantém o que está visualmente no
+  //      campo — atualiza instantâneo a cada keystroke.
+  //   2. setTimeout 200ms agendado a cada mudança; cleanup cancela
+  //      o anterior. Só dispara onQueryChange (URL update) quando
+  //      o usuário para de digitar por 200ms.
+  //   3. useEffect de sync re-popula localQuery quando `query` muda
+  //      por fonte externa (clear all, navegação direta).
+  //
+  // Benefício: filteredAssets não re-renderiza a galeria inteira a
+  // cada tecla. Browser back/forward também ganha histórico mais
+  // limpo (não tem 1 entrada por letra).
+  const [localQuery, setLocalQuery] = useState(query)
+
+  useEffect(() => {
+    setLocalQuery(query)
+  }, [query])
+
+  useEffect(() => {
+    if (localQuery === query) return
+    const id = window.setTimeout(() => onQueryChange(localQuery), 200)
+    return () => window.clearTimeout(id)
+  }, [localQuery, query, onQueryChange])
   return (
     <header className="bg-parchment border-4 border-ink shadow-pixel">
       <p className="bg-arcane text-parchment font-pixel text-xs uppercase border-b-4 border-ink px-4 py-3">
@@ -407,8 +430,8 @@ function Hero({
               </span>
               <input
                 type="search"
-                value={query}
-                onChange={(e) => onQueryChange(e.target.value)}
+                value={localQuery}
+                onChange={(e) => setLocalQuery(e.target.value)}
                 placeholder="Buscar pelo título..."
                 className="
                   w-full bg-white text-ink border-4 border-ink

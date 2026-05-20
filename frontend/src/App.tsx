@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout'
+import ScrollToTop from './components/ScrollToTop'
 import Gallery from './pages/Gallery'
 import NotFound from './pages/NotFound'
 import AuthInterceptor from './auth/AuthInterceptor'
@@ -44,6 +45,10 @@ export default function App() {
           renderiza nada visível — só conecta o api/client ao
           AuthContext + useNavigate. Precisa estar DENTRO do Router. */}
       <AuthInterceptor />
+      {/* ScrollToTop: reseta scroll ao topo em mudança de pathname.
+          Filtros da galeria (search params) NÃO disparam — só
+          navegação real entre páginas. */}
+      <ScrollToTop />
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Gallery />} />

@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, fileUrl, type Purchase } from '../api/client'
 import { formatDate, formatPrice } from '../lib/format'
+import LineSkeleton from '../components/LineSkeleton'
 
 // /library: histórico de compras. Antes era stub "em breve"; agora
 // alimenta-se de GET /api/v1/my/library, que devolve Purchase[]
@@ -124,11 +125,11 @@ function Content({
 
   if (purchases === null) {
     return (
-      <div className="bg-parchment border-4 border-ink shadow-pixel p-8 text-center animate-pulse">
-        <p className="text-sm font-bold uppercase tracking-widest">
-          ▌ Carregando...
-        </p>
-      </div>
+      <ul className="space-y-3" aria-busy="true" aria-live="polite">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <LineSkeleton key={i} />
+        ))}
+      </ul>
     )
   }
 

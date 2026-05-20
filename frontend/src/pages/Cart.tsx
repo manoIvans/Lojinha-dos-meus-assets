@@ -4,6 +4,7 @@ import { ApiError, api, fileUrl, type Asset } from '../api/client'
 import { useCart } from '../cart/CartContext'
 import { formatPrice } from '../lib/format'
 import Avatar from '../components/Avatar'
+import LineSkeleton from '../components/LineSkeleton'
 import { useToast } from '../components/Toast'
 
 // /carrinho: tela final antes do checkout.
@@ -175,11 +176,11 @@ function Content({
 
   if (assets === null) {
     return (
-      <div className="bg-parchment border-4 border-ink shadow-pixel p-8 text-center animate-pulse">
-        <p className="text-sm font-bold uppercase tracking-widest">
-          ▌ Carregando...
-        </p>
-      </div>
+      <ul className="space-y-3" aria-busy="true" aria-live="polite">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <LineSkeleton key={i} />
+        ))}
+      </ul>
     )
   }
 

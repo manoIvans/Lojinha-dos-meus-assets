@@ -42,7 +42,10 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen flex flex-col bg-twilight-scan text-ink font-mono">
-      <header>
+      {/* Header sticky: gruda no topo durante o scroll. z-30 fica acima
+          do conteúdo da página (cards, viewer 3D) mas abaixo de toasts
+          (z-50). bg-arcane-magic é opaco — não vaza conteúdo por trás. */}
+      <header className="sticky top-0 z-30">
         <nav className="bg-arcane-magic text-parchment px-6 py-4 border-b-4 border-ink flex items-center gap-4">
           {/* Marca em duas linhas: nome principal + tagline minúscula
               abaixo, no esquema "logo de jogo retrô". */}

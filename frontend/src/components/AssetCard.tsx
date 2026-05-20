@@ -34,6 +34,10 @@ function AssetCardImpl({ asset, priority = false }: Props) {
   // imgFailed cobre o caso do .png ter sumido (DB inconsistente,
   // upload incompleto). Sem isso aparece o ícone quebrado do browser.
   const [imgFailed, setImgFailed] = useState(false)
+  // imgLoaded controla o fade-in da thumbnail. Default false → mostra
+  // shimmer placeholder; vira true quando onLoad dispara (inclusive
+  // pra imagens em cache, que ainda assim disparam onLoad).
+  const [imgLoaded, setImgLoaded] = useState(false)
 
   return (
     <article
@@ -45,25 +49,48 @@ function AssetCardImpl({ asset, priority = false }: Props) {
     >
       {/* Link principal — área grande que leva pro detalhe do asset.
           Sem press próprio: o efeito está no <article> pai pra que
-          borda + sombra + conteúdo afundem juntos (sem desalinho). */}
-      <Link to={`/asset/${asset.id}`} className="block">
+          borda + sombra + conteúdo afundem juntos (sem desalinho).
+          focus-visible: ring arcane só com keyboard (não no click do
+          mouse) — pixel-art outline sem cor de plataforma. */}
+      <Link
+        to={`/asset/${asset.id}`}
+        className="block focus:outline-none focus-visible:ring-4 focus-visible:ring-arcane focus-visible:ring-inset"
+      >
         <div className="relative aspect-square bg-parchment overflow-hidden">
           {imgFailed ? (
             <div className="w-full h-full flex items-center justify-center text-ink/50 text-xs uppercase tracking-widest">
               sem imagem
             </div>
           ) : (
-            <img
-              src={fileUrl(asset.thumbnail_path)}
-              alt={asset.title}
-              loading={priority ? 'eager' : 'lazy'}
-              // fetchPriority é case-sensitive em React (camelCase). HTML
-              // final fica `fetchpriority`. Navegadores antigos ignoram.
-              fetchPriority={priority ? 'high' : 'low'}
-              decoding="async"
-              onError={() => setImgFailed(true)}
-              className="w-full h-full object-cover"
-            />
+            <>
+              {/* Shimmer placeholder: aparece enquanto img.src carrega.
+                  bg-ink/10 + animate-pulse mantém estética sem precisar
+                  de SVG ou gradient extra. Some quando imgLoaded vira
+                  true OU quando onError dispara (imgFailed esconde
+                  o branch inteiro). */}
+              {!imgLoaded && (
+                <div
+                  aria-hidden="true"
+                  className="absolute inset-0 bg-ink/10 animate-pulse"
+                />
+              )}
+              <img
+                src={fileUrl(asset.thumbnail_path)}
+                alt={asset.title}
+                loading={priority ? 'eager' : 'lazy'}
+                // fetchPriority é case-sensitive em React (camelCase). HTML
+                // final fica `fetchpriority`. Navegadores antigos ignoram.
+                fetchPriority={priority ? 'high' : 'low'}
+                decoding="async"
+                onLoad={() => setImgLoaded(true)}
+                onError={() => setImgFailed(true)}
+                className={`
+                  w-full h-full object-cover
+                  transition-opacity duration-200
+                  ${imgLoaded ? 'opacity-100' : 'opacity-0'}
+                `}
+              />
+            </>
           )}
         </div>
 
@@ -106,6 +133,7 @@ function AssetCardImpl({ asset, priority = false }: Props) {
             block border-t-2 border-ink/20 px-3 py-2
             transition-colors duration-75 ease-out
             hover:bg-ink/10 group
+            focus:outline-none focus-visible:ring-4 focus-visible:ring-arcane focus-visible:ring-inset
           "
         >
           <div className="flex items-center gap-2">
