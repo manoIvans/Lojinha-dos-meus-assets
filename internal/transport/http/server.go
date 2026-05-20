@@ -49,6 +49,13 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStor
 	assetRepo := postgres.NewAssetRepository(db)
 	assetHandler := handler.NewAssetHandler(assetRepo, files)
 
+	favoriteRepo := postgres.NewFavoriteRepository(db)
+	favoriteHandler := handler.NewFavoriteHandler(favoriteRepo)
+
+	cartRepo := postgres.NewCartRepository(db)
+	purchaseRepo := postgres.NewPurchaseRepository(db)
+	cartHandler := handler.NewCartHandler(cartRepo, purchaseRepo)
+
 	api := r.Group("/api/v1")
 	{
 		api.POST("/register", authHandler.Register)
@@ -58,10 +65,22 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStor
 		// ver detalhes. Mantemos FORA do grupo protegido de propósito.
 		api.GET("/assets", assetHandler.List)
 		api.GET("/assets/:id", assetHandler.GetByID)
+		// /assets/:id/similar devolve até N assets com tags em comum.
+		// Pública porque o catálogo é público; ajuda descoberta no
+		// AssetDetail.
+		api.GET("/assets/:id/similar", assetHandler.Similar)
+		// /trending devolve os mais comprados, ordenados por contagem
+		// de purchases. Pública porque alimenta a sessão "Em alta"
+		// da home.
+		api.GET("/trending", assetHandler.Trending)
 		// /tags devolve [{tag, count}] do catálogo inteiro. Público
 		// porque o catálogo é público — não vaza nada novo.
 		api.GET("/tags", assetHandler.Tags)
 
+		// Diretório de criadores. Pública porque o catálogo já
+		// expõe autores. Aceita ?limit= pra alimentar a sessão
+		// "Top criadores" da home sem precisar baixar todos.
+		api.GET("/users", userHandler.List)
 		// Perfil público por username. Devolve PublicUser (sem email).
 		api.GET("/users/:username", userHandler.GetByUsername)
 
@@ -74,12 +93,41 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStor
 			protected.POST("/assets", assetHandler.Create)
 			protected.PUT("/assets/:id", assetHandler.Update)
 			protected.DELETE("/assets/:id", assetHandler.Delete)
+			// Trocar só o arquivo físico (thumbnail OU modelo). Multipart.
+			// Mantemos separado do PUT JSON pra não misturar dois mundos
+			// no mesmo endpoint e pra que o cliente possa trocar arquivos
+			// independentemente dos metadados.
+			protected.PUT("/assets/:id/thumbnail", assetHandler.ReplaceThumbnail)
+			protected.PUT("/assets/:id/model", assetHandler.ReplaceModel)
 
 			// "Minha loja": lista os assets do usuário logado.
 			// Namespace /my/* deixa claro que tudo aqui é filtrado
 			// pela identidade do JWT — quando vier /my/library,
 			// /my/orders, etc, ficam todos juntos sob o mesmo prefixo.
 			protected.GET("/my/assets", assetHandler.MyAssets)
+
+			// Favoritos do usuário. POST/DELETE no asset específico
+			// pra que a UX (clicar no coração de um card) mapeie 1:1
+			// num verbo HTTP. /my/favorites devolve a lista completa
+			// (Asset[]); /my/favorite-ids devolve só os IDs pra
+			// hidratar os corações na Gallery em uma round-trip.
+			protected.POST("/assets/:id/favorite", favoriteHandler.Add)
+			protected.DELETE("/assets/:id/favorite", favoriteHandler.Remove)
+			protected.GET("/my/favorites", favoriteHandler.List)
+			protected.GET("/my/favorite-ids", favoriteHandler.ListIDs)
+
+			// Carrinho. Add/Remove no asset específico (UX 1:1).
+			// Checkout em /my/cart/checkout porque atua sobre o
+			// carrinho inteiro, não num asset. Library = histórico
+			// de compras (Purchase[]); library-ids hidrata UI sem N+1.
+			protected.POST("/assets/:id/cart", cartHandler.Add)
+			protected.DELETE("/assets/:id/cart", cartHandler.Remove)
+			protected.GET("/my/cart", cartHandler.List)
+			protected.GET("/my/cart-ids", cartHandler.ListIDs)
+			protected.DELETE("/my/cart", cartHandler.Clear)
+			protected.POST("/my/cart/checkout", cartHandler.Checkout)
+			protected.GET("/my/library", cartHandler.Library)
+			protected.GET("/my/library-ids", cartHandler.LibraryIDs)
 
 			// Perfil próprio: GET retorna a versão completa (com email),
 			// PATCH edita display_name/bio, POST/DELETE /avatar trocam

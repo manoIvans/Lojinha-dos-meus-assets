@@ -2,7 +2,11 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ApiError, api, fileUrl, type Asset } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
+import AssetCard from '../components/AssetCard'
+import AssetCardSkeleton from '../components/AssetCardSkeleton'
 import Avatar from '../components/Avatar'
+import CartButton from '../components/CartButton'
+import FavoriteButton from '../components/FavoriteButton'
 import { useToast } from '../components/Toast'
 import ModelViewer from '../components/ModelViewer'
 
@@ -181,6 +185,15 @@ function Detail({ asset }: { asset: Asset }) {
                 </p>
               </div>
 
+              {/* Ações de compra/favorito. CartButton só pra
+                  não-donos (backend rejeita auto-compra com 409;
+                  esconder é UX mais limpa). FavoriteButton aparece
+                  pra todos — favoritar próprio asset não é proibido. */}
+              <div className="flex flex-wrap justify-center gap-2">
+                {!isOwner && <CartButton assetID={asset.id} variant="inline" />}
+                <FavoriteButton assetID={asset.id} variant="inline" />
+              </div>
+
               <div>
                 <h3 className="text-[10px] font-bold uppercase tracking-widest mb-2 text-ink/60">
                   ▸ Descrição
@@ -224,7 +237,67 @@ function Detail({ asset }: { asset: Asset }) {
           gate aqui; backend valida ownership em PUT/DELETE de qualquer
           jeito (ErrAssetForbidden → 403). */}
       {isOwner && <OwnerPanel asset={asset} onConfirmDelete={handleDelete} />}
+
+      {/* Sessão de recomendações no fim da página: depois do usuário
+          ter visto o asset, mostra outros com tags em comum.
+          Fetch separado do AssetDetail principal pra não bloquear o
+          render do detalhe quando o endpoint similar estiver lento. */}
+      <SimilarSection assetID={asset.id} />
     </div>
+  )
+}
+
+// SimilarSection: busca e renderiza assets similares no fim da página.
+//
+// Trata 3 estados:
+//   - loading: skeletons
+//   - vazio: nada (não polui a UI com "sem resultados" — só some)
+//   - tem: header + grid de 4 cards
+//
+// useEffect refaz quando assetID muda — navegação interna pra outro
+// asset (clicando num card similar) atualiza esta sessão sem refresh.
+function SimilarSection({ assetID }: { assetID: number }) {
+  const [similar, setSimilar] = useState<Asset[] | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setSimilar(null)
+
+    api
+      .get<Asset[]>(`/api/v1/assets/${assetID}/similar?limit=4`)
+      .then((data) => {
+        if (!cancelled) setSimilar(data)
+      })
+      .catch(() => {
+        // Falha silenciosa: similares é discovery, não conteúdo
+        // crítico. Setamos [] pra esconder a sessão sem ruído.
+        if (!cancelled) setSimilar([])
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [assetID])
+
+  // Não-found / vazio: não renderiza nada. O detalhe acima já é
+  // self-contained.
+  if (similar !== null && similar.length === 0) return null
+
+  return (
+    <section className="bg-parchment border-4 border-ink shadow-pixel">
+      <h2 className="bg-arcane text-parchment font-pixel text-xs uppercase border-b-4 border-ink px-4 py-3">
+        ▶ Você também pode gostar
+      </h2>
+      <div className="p-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {similar === null
+            ? Array.from({ length: 4 }).map((_, i) => (
+                <AssetCardSkeleton key={i} />
+              ))
+            : similar.map((a) => <AssetCard key={a.id} asset={a} />)}
+        </div>
+      </div>
+    </section>
   )
 }
 

@@ -1,7 +1,9 @@
 import { lazy, Suspense } from 'react'
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout'
 import Gallery from './pages/Gallery'
+import NotFound from './pages/NotFound'
+import AuthInterceptor from './auth/AuthInterceptor'
 import { ProtectedRoute } from './auth/ProtectedRoute'
 import { ErrorBoundary } from './components/ErrorBoundary'
 
@@ -25,6 +27,9 @@ const MyStore = lazy(() => import('./pages/MyStore'))
 const Library = lazy(() => import('./pages/Library'))
 const ProfileMe = lazy(() => import('./pages/ProfileMe'))
 const UserProfile = lazy(() => import('./pages/UserProfile'))
+const Favorites = lazy(() => import('./pages/Favorites'))
+const Cart = lazy(() => import('./pages/Cart'))
+const Creators = lazy(() => import('./pages/Creators'))
 
 // Fallback minimalista enquanto o chunk da rota carrega. Vazio de
 // propósito: em rede normal o chunk vem em ~50-100ms e qualquer
@@ -35,6 +40,10 @@ const RouteFallback = () => null
 export default function App() {
   return (
     <ErrorBoundary>
+      {/* AuthInterceptor: registra o handler global de 401. Não
+          renderiza nada visível — só conecta o api/client ao
+          AuthContext + useNavigate. Precisa estar DENTRO do Router. */}
+      <AuthInterceptor />
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Gallery />} />
@@ -135,8 +144,42 @@ export default function App() {
               </Suspense>
             }
           />
-          {/* Catch-all: caminho desconhecido volta pra galeria. */}
-          <Route path="*" element={<Navigate to="/" replace />} />
+          {/* /criadores: diretório público de todos os usuários. */}
+          <Route
+            path="/criadores"
+            element={
+              <Suspense fallback={<RouteFallback />}>
+                <Creators />
+              </Suspense>
+            }
+          />
+          {/* /favoritos: assets salvos pelo usuário. Protegida —
+              precisa JWT pra /my/favorites. */}
+          <Route
+            path="/favoritos"
+            element={
+              <ProtectedRoute>
+                <Suspense fallback={<RouteFallback />}>
+                  <Favorites />
+                </Suspense>
+              </ProtectedRoute>
+            }
+          />
+          {/* /carrinho: revisão antes do checkout. Protegida. */}
+          <Route
+            path="/carrinho"
+            element={
+              <ProtectedRoute>
+                <Suspense fallback={<RouteFallback />}>
+                  <Cart />
+                </Suspense>
+              </ProtectedRoute>
+            }
+          />
+          {/* Catch-all: caminho desconhecido cai no NotFound dedicado
+              em vez do redirect silencioso pra galeria — ajuda debug
+              de link quebrado e dá contexto pro usuário. */}
+          <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>
     </ErrorBoundary>

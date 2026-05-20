@@ -57,15 +57,33 @@ export type User = {
   updated_at: string
 }
 
-// PublicUser é o shape devolvido por GET /users/:username. Sem email,
-// sem updated_at — alimenta a página pública /u/:username.
+// PublicUser é o shape devolvido por GET /users/:username e
+// GET /users. Sem email, sem updated_at — alimenta /u/:username
+// e o diretório /criadores.
+//
+// asset_count vem populado em GET /users (lista) mas omitido em
+// GET /users/:username (perfil individual) — o backend só calcula
+// quando faz sentido pro caller.
 export type PublicUser = {
   id: number
   username: string
   display_name: string
   bio: string
   avatar_path?: string | null
+  asset_count?: number
   created_at: string
+}
+
+// Purchase é o registro IMUTÁVEL de uma compra. price_cents_snapshot
+// preserva o preço pago — não muda mesmo que o vendedor reajuste o
+// preço do asset depois. `asset` é nullable: se o vendedor deletou,
+// permanece o registro (sem o conteúdo).
+export type Purchase = {
+  id: number
+  user_id: number
+  price_cents_snapshot: number
+  purchased_at: string
+  asset?: Asset | null
 }
 
 export type Asset = {
@@ -90,6 +108,32 @@ export type Asset = {
 }
 
 type RequestBody = FormData | Record<string, unknown> | undefined
+
+// onUnauthorized é um callback global disparado QUANDO uma request
+// recebe 401. Usado pelo AuthInterceptor pra forçar logout +
+// redirect quando o JWT expira ou é revogado.
+//
+// Por que callback em vez de jogar o erro pro caller:
+//   - 401 não-tratado em cada handler vira boilerplate massivo
+//   - Logout é um efeito colateral global que TODA tela precisa
+//     reagir igual (limpar contextos, redirecionar)
+//   - Registrar uma vez no boot do App é a forma DRY
+//
+// Tipos exportados pra que o componente registrar o callback fique
+// type-safe.
+type UnauthorizedHandler = () => void
+let onUnauthorized: UnauthorizedHandler | null = null
+
+export function setOnUnauthorized(handler: UnauthorizedHandler | null) {
+  onUnauthorized = handler
+}
+
+// Rotas onde 401 NÃO deve disparar logout global — são endpoints de
+// login/register cuja falha (credencial errada) é responsabilidade
+// da própria tela tratar. Sem este filtro, errar a senha derrubaria
+// o usuário do login pro login com mensagem de "sessão expirada",
+// que é confuso.
+const AUTH_PATHS_NO_LOGOUT = ['/api/v1/login', '/api/v1/register']
 
 // request é a única função que faz fetch. Toda chamada da app passa
 // por aqui — é o lugar para auth, base URL, parsing e tratamento de
@@ -135,6 +179,16 @@ async function request<T>(
   const responseBody = await parseBody(res)
 
   if (!res.ok) {
+    // 401 em endpoints autenticados → dispara o handler global ANTES
+    // de jogar o erro. O handler faz logout + redirect; o caller
+    // ainda recebe o erro pra que toasts/loaders limpem o estado.
+    if (
+      res.status === 401 &&
+      onUnauthorized &&
+      !AUTH_PATHS_NO_LOGOUT.includes(path)
+    ) {
+      onUnauthorized()
+    }
     throw new ApiError(res.status, responseBody)
   }
   return responseBody as T

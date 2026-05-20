@@ -42,15 +42,20 @@ type User struct {
 }
 
 // PublicUser é a versão SEM email do User, devolvida em endpoints
-// públicos (GET /users/:username). Email é dado pessoal; mesmo
-// signaling "esse handle existe" é OK porque os assets do dono já
-// expõem o vínculo de qualquer jeito.
+// públicos (GET /users/:username, GET /users). Email é dado pessoal;
+// mesmo signaling "esse handle existe" é OK porque os assets do
+// dono já expõem o vínculo de qualquer jeito.
+//
+// AssetCount é opcional + omitempty: alguns endpoints (perfil
+// individual) não precisam computar a contagem; outros (diretório
+// /users) populam pra que o frontend mostre "12 assets" no card.
 type PublicUser struct {
 	ID          int64     `json:"id"`
 	Username    string    `json:"username"`
 	DisplayName string    `json:"display_name"`
 	Bio         string    `json:"bio"`
 	AvatarPath  *string   `json:"avatar_path,omitempty"`
+	AssetCount  *int64    `json:"asset_count,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 

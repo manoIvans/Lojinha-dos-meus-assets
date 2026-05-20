@@ -1,5 +1,6 @@
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { useCart } from '../cart/CartContext'
 import Avatar from './Avatar'
 
 // Shell de todas as páginas. A combinação bg-parchment + text-ink +
@@ -28,6 +29,7 @@ function navLinkClasses({ isActive }: { isActive: boolean }) {
 
 export default function Layout() {
   const { isAuthenticated, currentUser, logout } = useAuth()
+  const { count: cartCount } = useCart()
   const navigate = useNavigate()
 
   function handleLogout() {
@@ -72,10 +74,29 @@ export default function Layout() {
           <NavLink to="/" end className={navLinkClasses}>
             Galeria
           </NavLink>
+          {/* Criadores fica fora do bloco autenticado — diretório
+              público, qualquer visitante pode explorar. */}
+          <NavLink to="/criadores" className={navLinkClasses}>
+            Criadores
+          </NavLink>
           {isAuthenticated && (
             <>
               <NavLink to="/my-store" className={navLinkClasses}>
                 Minha Loja
+              </NavLink>
+              <NavLink to="/favoritos" className={navLinkClasses}>
+                ♥ Favoritos
+              </NavLink>
+              <NavLink to="/carrinho" className={navLinkClasses}>
+                ⌬ Carrinho
+                {/* Badge com count só aparece quando > 0 pra não poluir.
+                    Renderizado dentro do NavLink pra ficar relativo
+                    ao link sem precisar de wrapper extra. */}
+                {cartCount > 0 && (
+                  <span className="ml-1 inline-block bg-arcane text-parchment border border-current px-1 text-[9px]">
+                    {cartCount}
+                  </span>
+                )}
               </NavLink>
               <NavLink to="/library" className={navLinkClasses}>
                 Biblioteca

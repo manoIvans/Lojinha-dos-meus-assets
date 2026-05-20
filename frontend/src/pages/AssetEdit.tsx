@@ -1,12 +1,12 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
-import { ApiError, api, type Asset } from '../api/client'
+import { ApiError, api, fileUrl, type Asset } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { useToast } from '../components/Toast'
 
-// AssetEdit (/asset/:id/edit): formulário de edição dos metadados de
-// um asset existente. Só edita texto/preço — arquivos (thumbnail e
-// modelo 3D) são imutáveis nesta versão; pra trocar, exclui + republica.
+// AssetEdit (/asset/:id/edit): formulário de edição completo do dono.
+// Edita metadados (título, descrição, tags, preço) E permite trocar
+// thumbnail e modelo 3D opcionalmente.
 //
 // Fluxo:
 //   1. Lê :id da URL
@@ -14,8 +14,13 @@ import { useToast } from '../components/Toast'
 //   3. Confere ownership client-side (currentUserId vs owner_id):
 //      - Se não é dono → redireciona pra /asset/:id (read-only)
 //      - Se é dono → mostra form pré-populado
-//   4. Submit: PUT /api/v1/assets/:id (JSON, protegido)
-//   5. Em sucesso → navega pra /asset/:id (rota de detalhe atualizada)
+//   4. Submit em SEQUÊNCIA:
+//      a. PUT JSON dos metadados
+//      b. Se um arquivo foi selecionado: PUT multipart da thumbnail
+//      c. Se outro foi selecionado: PUT multipart do modelo
+//      Cada passo falha isolado, com toast próprio — falha de
+//      arquivo não invalida metadados já salvos.
+//   5. Em sucesso → navega pra /asset/:id
 //
 // Ownership client-side é APENAS UX/redirecionamento — o backend
 // rejeita PUT/DELETE de quem não é dono (ErrAssetForbidden → 403).
@@ -89,6 +94,9 @@ function EditForm({ asset }: { asset: Asset }) {
   // na inicialização (join), e volta pra array no submit (parseTags).
   const [tagsInput, setTagsInput] = useState(asset.tags.join(', '))
   const [price, setPrice] = useState(fromCents(asset.price_cents))
+  // Files são opcionais — null = manter o atual; File = trocar.
+  const [thumbnailFile, setThumbnailFile] = useState<File | null>(null)
+  const [modelFile, setModelFile] = useState<File | null>(null)
 
   const [submitting, setSubmitting] = useState(false)
   // Validação de form (campos vazios, preço malformado) continua inline
@@ -112,19 +120,63 @@ function EditForm({ asset }: { asset: Asset }) {
     setSubmitting(true)
     setError(null)
 
+    // Acumula sucessos/falhas pra dar feedback honesto: pode salvar
+    // metadados mas falhar no upload da thumb, ou vice-versa. Não
+    // queremos um único toast genérico que esconda esse cenário.
+    let metadataSaved = false
+    let thumbReplaced = false
+    let modelReplaced = false
+    let anyError = false
+
     try {
-      // PUT é JSON puro (não multipart) — Update no backend só recebe
-      // os campos de texto + tags. Files ficam intocados.
       await api.put<Asset>(`/api/v1/assets/${asset.id}`, {
         title,
         description,
         tags,
         price_cents: priceCents,
       })
-      toast.success('Alterações salvas')
-      navigate(`/asset/${asset.id}`, { replace: true })
+      metadataSaved = true
     } catch (err) {
-      toast.error(messageFor(err))
+      toast.error(`Metadados: ${messageFor(err)}`)
+      anyError = true
+    }
+
+    if (thumbnailFile) {
+      try {
+        const form = new FormData()
+        form.append('thumbnail', thumbnailFile)
+        await api.put<Asset>(`/api/v1/assets/${asset.id}/thumbnail`, form)
+        thumbReplaced = true
+      } catch (err) {
+        toast.error(`Thumbnail: ${messageForFile(err)}`)
+        anyError = true
+      }
+    }
+
+    if (modelFile) {
+      try {
+        const form = new FormData()
+        form.append('model', modelFile)
+        await api.put<Asset>(`/api/v1/assets/${asset.id}/model`, form)
+        modelReplaced = true
+      } catch (err) {
+        toast.error(`Modelo: ${messageForFile(err)}`)
+        anyError = true
+      }
+    }
+
+    // Sucesso agregado: toast resume o que foi salvo. Em qualquer
+    // erro, deixa o usuário na página pra que ele possa tentar
+    // só os pedaços que falharam.
+    if (!anyError) {
+      const parts = [
+        metadataSaved && 'metadados',
+        thumbReplaced && 'thumbnail',
+        modelReplaced && 'modelo',
+      ].filter(Boolean) as string[]
+      toast.success(`Salvo: ${parts.join(' + ')}`)
+      navigate(`/asset/${asset.id}`, { replace: true })
+    } else {
       setSubmitting(false)
     }
   }
@@ -208,11 +260,26 @@ function EditForm({ asset }: { asset: Asset }) {
             />
           </label>
 
-          {/* Aviso sobre o que NÃO é editável aqui — UX honesta. */}
-          <p className="text-[10px] uppercase tracking-wider text-ink/60 border-t-4 border-ink pt-3">
-            ▸ Thumbnail e modelo 3D não podem ser alterados. Pra trocar
-            o arquivo, exclua e republique.
-          </p>
+          {/* Sessão de arquivos — visualmente separada dos metadados
+              por um divider espesso. Os 2 inputs são INDEPENDENTES:
+              o usuário pode trocar só a thumb, só o modelo, ou ambos. */}
+          <div className="border-t-4 border-ink pt-4 space-y-4">
+            <p className="text-[10px] uppercase tracking-wider text-ink/60">
+              ▸ Trocar arquivos (opcional — deixar em branco mantém o atual)
+            </p>
+
+            <ThumbnailField
+              currentPath={asset.thumbnail_path}
+              file={thumbnailFile}
+              onChange={setThumbnailFile}
+            />
+
+            <ModelField
+              currentPath={asset.model_path}
+              file={modelFile}
+              onChange={setModelFile}
+            />
+          </div>
 
           <div className="flex flex-wrap gap-3 pt-2">
             <button
@@ -230,6 +297,118 @@ function EditForm({ asset }: { asset: Asset }) {
             </Link>
           </div>
         </form>
+      </div>
+    </div>
+  )
+}
+
+// ThumbnailField: preview da atual + input de troca. Quando uma nova
+// imagem é selecionada, mostra "novo: filename.png" e botão pra
+// desfazer (volta pra null = manter atual).
+function ThumbnailField({
+  currentPath,
+  file,
+  onChange,
+}: {
+  currentPath: string
+  file: File | null
+  onChange: (f: File | null) => void
+}) {
+  // localPreview: dataURL do File quando há arquivo novo, senão null.
+  // useState com lazy init pra não criar dataURL desnecessariamente.
+  const [preview, setPreview] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!file) {
+      setPreview(null)
+      return
+    }
+    // URL.createObjectURL é mais barato que FileReader.readAsDataURL
+    // e mais previsível na limpeza de memória (revokeObjectURL).
+    const url = URL.createObjectURL(file)
+    setPreview(url)
+    return () => URL.revokeObjectURL(url)
+  }, [file])
+
+  return (
+    <div>
+      <span className="text-xs font-bold uppercase tracking-wider block mb-2">
+        Thumbnail
+      </span>
+      <div className="flex items-start gap-3">
+        <img
+          src={preview ?? fileUrl(currentPath)}
+          alt="Thumbnail atual"
+          className="w-20 h-20 object-cover border-2 border-ink shadow-pixel-sm"
+        />
+        <div className="flex-1 space-y-1">
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            onChange={(e) => onChange(e.target.files?.[0] ?? null)}
+            className="block w-full text-xs"
+          />
+          <p className="text-[10px] uppercase tracking-wider text-ink/60">
+            png / jpg / webp · até 5 MiB
+          </p>
+          {file && (
+            <button
+              type="button"
+              onClick={() => onChange(null)}
+              className="text-[10px] uppercase tracking-widest font-bold underline underline-offset-4 decoration-2 hover:text-arcane"
+            >
+              ✗ Desfazer troca
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ModelField: contraparte pro .glb/.gltf. Sem preview gráfico (não
+// dá pra renderizar 3D só pela seleção sem montar um Canvas inteiro).
+// Mostra só o nome do arquivo atual e o novo, se houver.
+function ModelField({
+  currentPath,
+  file,
+  onChange,
+}: {
+  currentPath: string
+  file: File | null
+  onChange: (f: File | null) => void
+}) {
+  // Pega o "filename canônico" do path relativo (após o último /).
+  // Útil pra UX — mas é o UUID do storage, não o nome original.
+  const currentName = currentPath.split('/').pop() ?? currentPath
+
+  return (
+    <div>
+      <span className="text-xs font-bold uppercase tracking-wider block mb-2">
+        Modelo 3D
+      </span>
+      <div className="space-y-1">
+        <p className="text-[10px] text-ink/60 break-all">
+          atual: <span className="font-mono">{currentName}</span>
+        </p>
+        <input
+          type="file"
+          accept=".glb,.gltf,model/gltf-binary,model/gltf+json"
+          onChange={(e) => onChange(e.target.files?.[0] ?? null)}
+          className="block w-full text-xs"
+        />
+        <p className="text-[10px] uppercase tracking-wider text-ink/60">
+          .glb / .gltf · até 100 MiB
+        </p>
+        {file && (
+          <button
+            type="button"
+            onClick={() => onChange(null)}
+            className="text-[10px] uppercase tracking-widest font-bold underline underline-offset-4 decoration-2 hover:text-arcane"
+          >
+            ✗ Desfazer troca
+          </button>
+        )}
       </div>
     </div>
   )
@@ -317,4 +496,14 @@ function messageFor(err: unknown): string {
     if (err.status === 404) return 'Asset não encontrado'
   }
   return 'Falha ao salvar'
+}
+
+// messageForFile diferencia erros específicos de upload de arquivo
+// (413 tamanho, 415 formato). 403/404 reaproveitam o wording acima.
+function messageForFile(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 413) return 'arquivo maior que o limite'
+    if (err.status === 415) return 'formato não suportado'
+  }
+  return messageFor(err)
 }

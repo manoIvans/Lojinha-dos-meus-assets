@@ -6,6 +6,7 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -23,6 +24,7 @@ type userProfileRepository interface {
 	UpdateProfile(ctx context.Context, id int64, displayName, bio string) (*domain.User, error)
 	SetAvatar(ctx context.Context, id int64, newPath string) (oldPath string, err error)
 	ClearAvatar(ctx context.Context, id int64) (oldPath string, err error)
+	ListWithAssetCount(ctx context.Context, limit int) ([]*domain.PublicUser, error)
 }
 
 // avatarStorage abstrai o que o UserHandler precisa do storage.
@@ -79,6 +81,35 @@ func (h *UserHandler) GetMe(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, user)
+}
+
+// List devolve TODOS os usuários (PublicUser com asset_count) pra
+// alimentar o diretório /criadores. Pública porque a info é pública
+// (catálogo já expõe os autores).
+//
+// Aceita ?limit=N pra a sessão "Top criadores" na home pegar só
+// os primeiros (default 0 = todos). Cap em 100 contra abuse.
+func (h *UserHandler) List(c *gin.Context) {
+	const maxLimit = 100
+	limit := 0 // 0 = sem limite no repo
+	if raw := c.Query("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit inválido"})
+			return
+		}
+		if n > maxLimit {
+			n = maxLimit
+		}
+		limit = n
+	}
+
+	users, err := h.users.ListWithAssetCount(c.Request.Context(), limit)
+	if err != nil {
+		serverError(c, "list users", err, "falha ao listar criadores")
+		return
+	}
+	c.JSON(http.StatusOK, users)
 }
 
 // GetByUsername é a página pública /u/:username. Devolve PublicUser

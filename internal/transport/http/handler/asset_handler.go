@@ -27,10 +27,16 @@ type assetRepository interface {
 	List(ctx context.Context) ([]*domain.Asset, error)
 	ListByOwner(ctx context.Context, ownerID int64) ([]*domain.Asset, error)
 	Update(ctx context.Context, id, ownerID int64, title, description string, tags []string, priceCents int64) (*domain.Asset, error)
+	// UpdateThumbnail e UpdateModel trocam o arquivo físico do asset
+	// e devolvem o caminho ANTERIOR pra cleanup no disco.
+	UpdateThumbnail(ctx context.Context, id, ownerID int64, newPath string) (oldPath string, err error)
+	UpdateModel(ctx context.Context, id, ownerID int64, newPath string) (oldPath string, err error)
 	// Delete devolve os caminhos relativos dos arquivos físicos do
 	// asset deletado, pra que o handler possa removê-los do disco.
 	Delete(ctx context.Context, id, ownerID int64) (thumbnailPath, modelPath string, err error)
 	ListTagsWithCounts(ctx context.Context) ([]*domain.TagCount, error)
+	ListSimilar(ctx context.Context, assetID int64, limit int) ([]*domain.Asset, error)
+	ListTrending(ctx context.Context, limit int) ([]*domain.Asset, error)
 }
 
 // fileStorage abstrai o backend de arquivos. Mesma motivação da
@@ -41,6 +47,14 @@ type fileStorage interface {
 	SaveModel(fh *multipart.FileHeader) (string, error)
 	Remove(relPath string) error
 }
+
+// Limites pros endpoints "trocar arquivo" — apertados pelo mesmo
+// motivo do Create (defender contra DoS por body gigante). Modelos
+// 3D são maiores que thumbs, daí o teto separado.
+const (
+	maxReplaceThumbnailBytes = 8 << 20   //   8 MiB
+	maxReplaceModelBytes     = 110 << 20 // 110 MiB
+)
 
 type AssetHandler struct {
 	assets  assetRepository
@@ -278,6 +292,79 @@ func (h *AssetHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, assets)
 }
 
+// Similar é PÚBLICA: devolve até `limit` assets parecidos com o ID
+// do path, baseado em quantidade de tags em comum. Default limit = 4
+// (cobre uma linha de 4 cards em desktop). Cap em 20 pra não permitir
+// "?limit=10000" virar query pesada.
+//
+// 404 se asset alvo não existe; 200 com [] se existe mas não há
+// candidatos.
+func (h *AssetHandler) Similar(c *gin.Context) {
+	id, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+
+	const (
+		defaultLimit = 4
+		maxLimit     = 20
+	)
+	limit := defaultLimit
+	if raw := c.Query("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit inválido"})
+			return
+		}
+		if n > maxLimit {
+			n = maxLimit
+		}
+		limit = n
+	}
+
+	assets, err := h.assets.ListSimilar(c.Request.Context(), id, limit)
+	if err != nil {
+		if errors.Is(err, domain.ErrAssetNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "asset não encontrado"})
+			return
+		}
+		serverError(c, "list similar", err, "falha ao listar similares")
+		return
+	}
+	c.JSON(http.StatusOK, assets)
+}
+
+// Trending é PÚBLICA: devolve os assets mais comprados. Default
+// limit = 8 (cobre duas linhas de 4 cards). Cap em 50.
+//
+// 200 com [] quando ninguém comprou nada ainda — frontend esconde
+// a sessão e segue mostrando só o catálogo normal.
+func (h *AssetHandler) Trending(c *gin.Context) {
+	const (
+		defaultLimit = 8
+		maxLimit     = 50
+	)
+	limit := defaultLimit
+	if raw := c.Query("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit inválido"})
+			return
+		}
+		if n > maxLimit {
+			n = maxLimit
+		}
+		limit = n
+	}
+
+	assets, err := h.assets.ListTrending(c.Request.Context(), limit)
+	if err != nil {
+		serverError(c, "list trending", err, "falha ao listar mais vendidos")
+		return
+	}
+	c.JSON(http.StatusOK, assets)
+}
+
 // Tags é PÚBLICA — qualquer um pode ver a distribuição de tags. Não
 // vaza dado privado: o catálogo já é público. Resposta é ordenada
 // por popularidade (count desc) para que o frontend possa renderizar
@@ -416,6 +503,95 @@ func (h *AssetHandler) Delete(c *gin.Context) {
 	h.cleanup(thumbPath, modelPath)
 
 	c.Status(http.StatusNoContent)
+}
+
+// ReplaceThumbnail troca o arquivo físico de thumbnail, fazendo
+// cleanup do antigo. Multipart com campo `thumbnail`. Mesma regra
+// de ownership do Update (403 se não for dono).
+//
+// Ordem crítica (mesmo padrão do avatar):
+//  1. Salva NOVO arquivo no disco (UUID, sem colisão).
+//  2. UPDATE no DB (devolve path antigo).
+//  3. Remove o ANTIGO do disco (best-effort).
+//
+// Se passo 2 falha, removemos o NOVO. Se passo 3 falha, log e segue
+// — DB é fonte da verdade.
+func (h *AssetHandler) ReplaceThumbnail(c *gin.Context) {
+	h.replaceAssetFile(c, "thumbnail", maxReplaceThumbnailBytes, h.storage.SaveThumbnail, h.assets.UpdateThumbnail)
+}
+
+// ReplaceModel troca o arquivo .glb/.gltf. Espelha ReplaceThumbnail.
+func (h *AssetHandler) ReplaceModel(c *gin.Context) {
+	h.replaceAssetFile(c, "model", maxReplaceModelBytes, h.storage.SaveModel, h.assets.UpdateModel)
+}
+
+// replaceAssetFile é a primitiva que ReplaceThumbnail e ReplaceModel
+// compartilham. saveFile e updateRepo são as duas funções diferentes
+// por tipo de arquivo; o resto do fluxo é idêntico.
+func (h *AssetHandler) replaceAssetFile(
+	c *gin.Context,
+	field string,
+	maxBytes int64,
+	saveFile func(*multipart.FileHeader) (string, error),
+	updateRepo func(ctx context.Context, id, ownerID int64, newPath string) (oldPath string, err error),
+) {
+	ownerID, ok := userIDFromContext(c)
+	if !ok {
+		return
+	}
+	id, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
+	if err := c.Request.ParseMultipartForm(8 << 20); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "form inválido: " + err.Error()})
+		return
+	}
+
+	fh, err := c.FormFile(field)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "campo '" + field + "' é obrigatório"})
+		return
+	}
+
+	newPath, err := saveFile(fh)
+	if err != nil {
+		writeStorageError(c, err, field)
+		return
+	}
+
+	oldPath, err := updateRepo(c.Request.Context(), id, ownerID, newPath)
+	if err != nil {
+		// Rollback: remove o arquivo recém-salvo.
+		if rmErr := h.storage.Remove(newPath); rmErr != nil {
+			log.Printf("rollback %s replace: %v", field, rmErr)
+		}
+		switch {
+		case errors.Is(err, domain.ErrAssetNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "asset não encontrado"})
+		case errors.Is(err, domain.ErrAssetForbidden):
+			c.JSON(http.StatusForbidden, gin.H{"error": "este asset não é seu"})
+		default:
+			serverError(c, "replace "+field, err, "falha ao atualizar arquivo")
+		}
+		return
+	}
+
+	if oldPath != "" {
+		if err := h.storage.Remove(oldPath); err != nil {
+			log.Printf("remove old %s %q: %v", field, oldPath, err)
+		}
+	}
+
+	// Devolve o Asset atualizado pra UI conseguir refletir sem GET extra.
+	asset, err := h.assets.FindByID(c.Request.Context(), id)
+	if err != nil {
+		serverError(c, "reload asset after "+field, err, "falha ao recarregar asset")
+		return
+	}
+	c.JSON(http.StatusOK, asset)
 }
 
 // serverError é o caminho único de 500 com causa: loga o erro real

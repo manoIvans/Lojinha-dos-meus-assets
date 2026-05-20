@@ -113,6 +113,63 @@ func (r *UserRepository) FindByID(ctx context.Context, id int64) (*domain.User, 
 	return u, nil
 }
 
+// ListWithAssetCount devolve TODOS os usuários (PublicUser) com o
+// total de assets de cada um. Usado pelo diretório /criadores e
+// pela seção "Top criadores" da home.
+//
+// LEFT JOIN com assets pra que usuários sem nenhum publicação ainda
+// apareçam (com count=0). Os campos sensíveis (email, password_hash)
+// não vêm — devolvemos só os campos de PublicUser + AssetCount.
+//
+// Ordenação: assets DESC, depois display_name pra desempate. Aplica
+// LIMIT só quando `limit > 0`; limit <= 0 devolve todos.
+func (r *UserRepository) ListWithAssetCount(ctx context.Context, limit int) ([]*domain.PublicUser, error) {
+	// Query base. Quando limit > 0, anexamos LIMIT no final. Mais
+	// simples que CASE no SQL — duas queries pequenas vs uma com
+	// fmt.Sprintf que invita SQL injection se algum dia limit virar
+	// string vinda de usuário.
+	const baseQ = `
+		SELECT u.id, u.username, u.display_name, u.bio, u.avatar_path,
+		       u.created_at,
+		       COUNT(a.id) AS asset_count
+		  FROM users u
+		  LEFT JOIN assets a ON a.owner_id = u.id
+		 GROUP BY u.id
+		 ORDER BY asset_count DESC, u.display_name ASC`
+
+	var rows pgx.Rows
+	var err error
+	if limit > 0 {
+		rows, err = r.db.Query(ctx, baseQ+" LIMIT $1", limit)
+	} else {
+		rows, err = r.db.Query(ctx, baseQ)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("select users with asset count: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]*domain.PublicUser, 0)
+	for rows.Next() {
+		u := &domain.PublicUser{}
+		var count int64
+		if err := rows.Scan(
+			&u.ID, &u.Username, &u.DisplayName, &u.Bio, &u.AvatarPath,
+			&u.CreatedAt, &count,
+		); err != nil {
+			return nil, fmt.Errorf("scan user with count: %w", err)
+		}
+		// Preenche AssetCount sempre (até quando 0) — diferenciar
+		// "não populado" de "tem 0" não vale a complexidade aqui.
+		u.AssetCount = &count
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate users: %w", err)
+	}
+	return out, nil
+}
+
 // FindByUsername alimenta a página pública /u/:username. Username
 // vem do path param já normalizado (lowercase) pelo handler.
 func (r *UserRepository) FindByUsername(ctx context.Context, username string) (*domain.User, error) {

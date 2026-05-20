@@ -29,10 +29,21 @@ export default function Login() {
   const navigate = useNavigate()
   const location = useLocation()
 
-  // Se veio do ProtectedRoute, volta para o destino original.
-  const redirectTo =
-    (location.state as { from?: { pathname: string } } | null)?.from?.pathname ??
-    '/dashboard'
+  // location.state pode trazer dois sinais:
+  //   - `from`: rota que o ProtectedRoute interceptou ou que o
+  //     AuthInterceptor estava tentando acessar quando levou 401.
+  //   - `sessionExpired`: AuthInterceptor coloca true quando o
+  //     redirect veio de um 401 (token expirado/inválido).
+  //
+  // Type assertion ampla porque o React Router tipa state como
+  // `unknown`. O fallback `?? null` evita acesso em undefined.
+  const navState = (location.state as {
+    from?: { pathname: string }
+    sessionExpired?: boolean
+  } | null) ?? null
+
+  const redirectTo = navState?.from?.pathname ?? '/dashboard'
+  const sessionExpired = navState?.sessionExpired === true
 
   const [mode, setMode] = useState<Mode>('login')
   const [email, setEmail] = useState('')
@@ -80,6 +91,18 @@ export default function Login() {
         <h1 className="bg-arcane text-parchment text-sm font-bold uppercase tracking-widest border-b-4 border-ink px-4 py-3">
           ▶ {mode === 'login' ? 'Entrar' : 'Criar Conta'}
         </h1>
+
+        {/* Banner de sessão expirada: aparece quando o usuário chegou
+            ao Login por causa de um 401 interceptado, não por escolha
+            própria. Só no modo login (no register não faz sentido). */}
+        {sessionExpired && mode === 'login' && (
+          <div
+            role="status"
+            className="bg-twilight text-parchment border-b-4 border-ink px-6 py-3 text-xs uppercase tracking-widest"
+          >
+            ▸ Sua sessão expirou. Entre de novo pra continuar.
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           {/* Username + Display name só aparecem no register. Vêm

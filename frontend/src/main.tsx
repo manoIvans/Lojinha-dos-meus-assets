@@ -2,20 +2,29 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import { AuthProvider } from './auth/AuthContext'
+import { CartProvider } from './cart/CartContext'
+import { FavoritesProvider } from './favorites/FavoritesContext'
 import { ToastProvider } from './components/Toast'
 import App from './App'
 import './index.css'
 
 // Ordem dos providers importa:
-//   BrowserRouter (rotas) → AuthProvider (estado de auth, sem rotas
-//   dentro) → ToastProvider (notificações; precisa estar acima de App
-//   pra que qualquer página consuma useToast) → App.
+//   BrowserRouter (rotas)
+//     → AuthProvider (estado de auth)
+//       → ToastProvider (notificações; qualquer página consome)
+//         → FavoritesProvider (depende de useAuth)
+//           → CartProvider (depende de useAuth)
+//             → App
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
       <AuthProvider>
         <ToastProvider>
-          <App />
+          <FavoritesProvider>
+            <CartProvider>
+              <App />
+            </CartProvider>
+          </FavoritesProvider>
         </ToastProvider>
       </AuthProvider>
     </BrowserRouter>

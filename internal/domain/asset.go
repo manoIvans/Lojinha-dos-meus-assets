@@ -18,6 +18,22 @@ var ErrAssetNotFound = errors.New("asset não encontrado")
 // (a listagem retorna todos), então não há informação a esconder.
 var ErrAssetForbidden = errors.New("operação não permitida neste asset")
 
+// ErrSelfPurchase é retornado quando o usuário tenta adicionar um
+// asset PRÓPRIO ao carrinho ou comprá-lo. Conceitualmente sem sentido
+// (já é dele) e ainda cria registro de "compra" ruidoso. Mapeado
+// pra 409 Conflict no handler.
+var ErrSelfPurchase = errors.New("não pode comprar o próprio asset")
+
+// ErrAlreadyPurchased é retornado quando o usuário tenta comprar um
+// asset que já comprou antes. Bens digitais são únicos — comprar 2x
+// não faz sentido. Mapeado pra 409 Conflict.
+var ErrAlreadyPurchased = errors.New("asset já comprado anteriormente")
+
+// ErrCartEmpty é retornado quando o checkout é chamado mas o
+// carrinho não tem nada. Mapeado pra 400 Bad Request — não há nada
+// a comprar.
+var ErrCartEmpty = errors.New("carrinho vazio")
+
 // Asset representa um item à venda na Lojinha. Metadados + ponteiros
 // para os arquivos físicos (thumbnail e modelo 3D). Os arquivos em si
 // vivem em disco (ou eventualmente em object storage); aqui guardamos
@@ -48,6 +64,24 @@ type Asset struct {
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Purchase é o registro IMUTÁVEL de uma compra. price_cents_snapshot
+// preserva o preço pago, ignorando reajustes futuros do dono. Asset
+// pode ser nil (campo aninhado opcional preenchido via JOIN) se o
+// vendedor deletou o asset depois da compra — o registro permanece
+// mas perde o conteúdo associado.
+//
+// Devolvido pelo GET /api/v1/my/library; o asset aninhado tem os
+// mesmos campos do Asset normal pra que o frontend reuse o card.
+type Purchase struct {
+	ID                 int64     `json:"id"`
+	UserID             int64     `json:"user_id"`
+	PriceCentsSnapshot int64     `json:"price_cents_snapshot"`
+	PurchasedAt        time.Time `json:"purchased_at"`
+	// Asset é nil se o vendedor deletou o asset depois da compra.
+	// O front mostra "asset removido" quando isso acontece.
+	Asset *Asset `json:"asset,omitempty"`
 }
 
 // TagCount é o par tag→quantidade-de-assets usado pela tela de

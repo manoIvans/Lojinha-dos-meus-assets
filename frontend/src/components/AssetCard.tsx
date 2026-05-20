@@ -2,15 +2,25 @@ import { memo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { fileUrl, type Asset } from '../api/client'
 import Avatar from './Avatar'
+import CartButton from './CartButton'
+import FavoriteButton from './FavoriteButton'
 
-// Card de asset na vitrine. Agora é INTERATIVO: clicar leva pra
-// /asset/:id (página de detalhe com o viewer 3D). Por isso ganhou
-// o efeito de "press" no hover — mesmo padrão dos botões.
+// Card de asset na vitrine. Estrutura com DOIS Links:
 //
-// Trocou de <article> para <Link>: HTML5 permite <article> dentro
-// de <a>, mas como o card inteiro vira um único hit-target, agrupar
-// a semântica num só elemento é mais simples. Para ferramentas de
-// acessibilidade, o Link descrito pelo title do asset é suficiente.
+//   <article>
+//     <Link to="/asset/:id">  ← imagem + tags + título + preço
+//     <Link to="/u/:username"> ← rodapé com avatar + nome do autor
+//
+// Anchors aninhadas são HTML inválido, então a área principal e a
+// do autor são irmãs dentro de <article>. Cada uma tem seu próprio
+// efeito hover. Mantém a borda/sombra do card como envelope visual
+// (no <article>) e o "press" só na zona principal — feedback
+// distinto entre "ir pro asset" e "ir pro criador".
+//
+// O FavoriteButton e o CartButton ficam fora de ambos os Links,
+// posicionados absolutamente em cima da thumbnail. Cada um já tem
+// stopPropagation porque herdam do flow antigo (não dentro de Link
+// agora, mas mantido pra robustez).
 
 type Props = {
   asset: Asset
@@ -25,61 +35,92 @@ function AssetCardImpl({ asset, priority = false }: Props) {
   const [imgFailed, setImgFailed] = useState(false)
 
   return (
-    <Link
-      to={`/asset/${asset.id}`}
-      className="
-        block bg-parchment border-4 border-ink shadow-pixel
-        transition-all duration-75 ease-out
-        hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none
-      "
-    >
-      <div className="aspect-square bg-parchment overflow-hidden">
-        {imgFailed ? (
-          <div className="w-full h-full flex items-center justify-center text-ink/50 text-xs uppercase tracking-widest">
-            sem imagem
-          </div>
-        ) : (
-          <img
-            src={fileUrl(asset.thumbnail_path)}
-            alt={asset.title}
-            loading={priority ? 'eager' : 'lazy'}
-            // fetchPriority é case-sensitive em React (camelCase). HTML
-            // final fica `fetchpriority`. Navegadores antigos ignoram.
-            fetchPriority={priority ? 'high' : 'low'}
-            decoding="async"
-            onError={() => setImgFailed(true)}
-            className="w-full h-full object-cover"
-          />
-        )}
-      </div>
+    <article className="relative bg-parchment border-4 border-ink shadow-pixel">
+      {/* Link principal — área grande que leva pro detalhe do asset. */}
+      <Link
+        to={`/asset/${asset.id}`}
+        className="
+          block
+          transition-all duration-75 ease-out
+          hover:translate-x-[1px] hover:translate-y-[1px]
+        "
+      >
+        <div className="relative aspect-square bg-parchment overflow-hidden">
+          {imgFailed ? (
+            <div className="w-full h-full flex items-center justify-center text-ink/50 text-xs uppercase tracking-widest">
+              sem imagem
+            </div>
+          ) : (
+            <img
+              src={fileUrl(asset.thumbnail_path)}
+              alt={asset.title}
+              loading={priority ? 'eager' : 'lazy'}
+              // fetchPriority é case-sensitive em React (camelCase). HTML
+              // final fica `fetchpriority`. Navegadores antigos ignoram.
+              fetchPriority={priority ? 'high' : 'low'}
+              decoding="async"
+              onError={() => setImgFailed(true)}
+              className="w-full h-full object-cover"
+            />
+          )}
+        </div>
 
-      <div className="border-t-4 border-ink p-3 space-y-1.5">
-        {/* No card mostramos só a primeira tag + um "+N" se houver mais —
-            evita ocupar espaço demais em modelos muito tageados. A lista
-            completa fica no /asset/:id. */}
-        {asset.tags.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            <span className="inline-block bg-arcane text-parchment text-[10px] px-2 py-0.5 uppercase tracking-widest font-bold">
-              {asset.tags[0]}
-            </span>
-            {asset.tags.length > 1 && (
-              <span className="inline-block bg-ink text-parchment text-[10px] px-2 py-0.5 uppercase tracking-widest font-bold">
-                +{asset.tags.length - 1}
+        <div className="border-t-4 border-ink p-3 space-y-1.5">
+          {/* No card mostramos só a primeira tag + um "+N" se houver mais —
+              evita ocupar espaço demais em modelos muito tageados. A lista
+              completa fica no /asset/:id. */}
+          {asset.tags.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              <span className="inline-block bg-arcane text-parchment text-[10px] px-2 py-0.5 uppercase tracking-widest font-bold">
+                {asset.tags[0]}
               </span>
-            )}
-          </div>
-        )}
-        <h2
-          className="font-bold text-sm uppercase tracking-wider truncate"
-          title={asset.title}
+              {asset.tags.length > 1 && (
+                <span className="inline-block bg-ink text-parchment text-[10px] px-2 py-0.5 uppercase tracking-widest font-bold">
+                  +{asset.tags.length - 1}
+                </span>
+              )}
+            </div>
+          )}
+          <h2
+            className="font-bold text-sm uppercase tracking-wider truncate"
+            title={asset.title}
+          >
+            {asset.title}
+          </h2>
+          <p className="text-sm font-bold pt-1">
+            ✦ {formatPrice(asset.price_cents)}
+          </p>
+        </div>
+      </Link>
+
+      {/* Faixa do autor: Link separado pra /u/:username. Borda 2px
+          superior visualmente separa do bloco principal. Hover mais
+          discreto (underline + cor arcane) pra que o usuário entenda
+          que é um destino distinto. */}
+      {asset.author_username ? (
+        <Link
+          to={`/u/${asset.author_username}`}
+          className="
+            border-t-2 border-ink/20 px-3 py-2 flex items-center gap-2
+            hover:bg-ink/5 group
+          "
         >
-          {asset.title}
-        </h2>
-        {/* Avatar + nome do autor. Link explícito para /u/:username
-            seria HTML inválido aqui (anchor aninhada no Link do card),
-            então mantemos só o display — a navegação pro perfil é
-            feita pelo AssetDetail. */}
-        <div className="flex items-center gap-2">
+          <Avatar
+            avatarPath={asset.author_avatar_path}
+            name={asset.author_name ?? '?'}
+            size="xs"
+          />
+          <p className="text-xs truncate">
+            por{' '}
+            <span className="font-bold group-hover:text-arcane group-hover:underline underline-offset-4 decoration-2">
+              {asset.author_name ?? 'anônimo'}
+            </span>
+          </p>
+        </Link>
+      ) : (
+        // Fallback caso o asset não tenha author_username (resposta
+        // antiga ou JOIN faltando) — sem Link, só texto.
+        <div className="border-t-2 border-ink/20 px-3 py-2 flex items-center gap-2">
           <Avatar
             avatarPath={asset.author_avatar_path}
             name={asset.author_name ?? '?'}
@@ -92,11 +133,17 @@ function AssetCardImpl({ asset, priority = false }: Props) {
             </span>
           </p>
         </div>
-        <p className="text-sm font-bold pt-1">
-          ✦ {formatPrice(asset.price_cents)}
-        </p>
+      )}
+
+      {/* Overlay vertical no canto superior direito: favorito em cima,
+          carrinho embaixo. Posicionado absoluto no <article> pra
+          ficar acima dos dois Links irmãos. Cada botão já tem
+          stopPropagation+preventDefault internamente. */}
+      <div className="absolute top-2 right-2 flex flex-col gap-2">
+        <FavoriteButton assetID={asset.id} variant="overlay" />
+        <CartButton assetID={asset.id} variant="overlay" />
       </div>
-    </Link>
+    </article>
   )
 }
 

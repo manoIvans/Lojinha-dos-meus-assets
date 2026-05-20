@@ -178,6 +178,134 @@ func (r *AssetRepository) ListByOwner(ctx context.Context, ownerID int64) ([]*do
 	return assets, nil
 }
 
+// ListSimilar devolve assets parecidos com o `assetID` baseado em
+// quantidade de tags em comum. Score = cardinality da interseção das
+// tags entre o asset alvo e cada candidato. Ordenado por score desc,
+// depois por created_at desc pra desempate.
+//
+// O asset alvo nunca aparece no resultado (a.id != $1). Sem filtro
+// de owner — incluir "mais do mesmo criador" é desejável e barato.
+//
+// Retorna ErrAssetNotFound se o asset alvo não existe (consulta da
+// CTE devolve 0 linhas e o CROSS JOIN produz array vazio, mas o
+// handler precisa diferenciar do caso "existe mas sem similares").
+// Por isso fazemos um SELECT prévio.
+//
+// Performance: tag intersection via unnest+INTERSECT é O(n*m) por
+// linha, mas com `a.tags && target.tags` no WHERE o planner reduz
+// drasticamente os candidatos via o índice GIN em tags (criado em
+// migration 004).
+func (r *AssetRepository) ListSimilar(ctx context.Context, assetID int64, limit int) ([]*domain.Asset, error) {
+	// Validamos existência primeiro pra distinguir 404 (não existe)
+	// de [] (existe mas sem candidatos). Sem isso, o SELECT principal
+	// retornaria sempre [] nos dois casos.
+	var exists bool
+	if err := r.db.QueryRow(
+		ctx,
+		`SELECT EXISTS (SELECT 1 FROM assets WHERE id = $1)`,
+		assetID,
+	).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("check asset for similar: %w", err)
+	}
+	if !exists {
+		return nil, domain.ErrAssetNotFound
+	}
+
+	const q = `
+		WITH target AS (
+			SELECT tags FROM assets WHERE id = $1
+		)
+		SELECT a.id, a.owner_id, a.title, a.description, a.tags,
+		       a.price_cents, a.thumbnail_path, a.model_path,
+		       a.created_at, a.updated_at, ` + assetAuthorColumns + `
+		  FROM assets a
+		  CROSS JOIN target
+		  JOIN users u ON u.id = a.owner_id
+		 WHERE a.id != $1
+		   AND a.tags && target.tags
+		 ORDER BY
+		   cardinality(ARRAY(
+		     SELECT unnest(a.tags) INTERSECT SELECT unnest(target.tags)
+		   )) DESC,
+		   a.created_at DESC
+		 LIMIT $2`
+
+	rows, err := r.db.Query(ctx, q, assetID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("select similar assets: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]*domain.Asset, 0)
+	for rows.Next() {
+		a := &domain.Asset{}
+		if err := rows.Scan(
+			&a.ID, &a.OwnerID, &a.Title, &a.Description, &a.Tags,
+			&a.PriceCents, &a.ThumbnailPath, &a.ModelPath,
+			&a.CreatedAt, &a.UpdatedAt,
+			&a.AuthorName, &a.AuthorUsername, &a.AuthorAvatarPath,
+		); err != nil {
+			return nil, fmt.Errorf("scan similar row: %w", err)
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate similar: %w", err)
+	}
+	return out, nil
+}
+
+// ListTrending devolve os assets MAIS COMPRADOS, ordenados por
+// contagem de compras DESC. Apenas assets com pelo menos 1 compra
+// aparecem — "trending" com 0 vendas é ruído.
+//
+// Empate em count: desempate por created_at DESC (mais novo entre
+// igualmente populares aparece primeiro), depois id DESC pra
+// determinismo total.
+//
+// Por que JOIN com purchases em vez de coluna "purchase_count"
+// denormalizada no assets:
+//   - Catálogo é pequeno; a agregação é cheap.
+//   - Manter coluna denorm exige trigger/recálculo em cada compra
+//     ou cancelamento — complexidade desproporcional ao ganho.
+//   - Se virar gargalo, criar materialized view + REFRESH periódico.
+func (r *AssetRepository) ListTrending(ctx context.Context, limit int) ([]*domain.Asset, error) {
+	const q = `
+		SELECT a.id, a.owner_id, a.title, a.description, a.tags,
+		       a.price_cents, a.thumbnail_path, a.model_path,
+		       a.created_at, a.updated_at, ` + assetAuthorColumns + `
+		  FROM assets a
+		  JOIN users u ON u.id = a.owner_id
+		  JOIN purchases p ON p.asset_id = a.id
+		 GROUP BY a.id, u.id
+		 ORDER BY COUNT(p.id) DESC, a.created_at DESC, a.id DESC
+		 LIMIT $1`
+
+	rows, err := r.db.Query(ctx, q, limit)
+	if err != nil {
+		return nil, fmt.Errorf("select trending assets: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]*domain.Asset, 0)
+	for rows.Next() {
+		a := &domain.Asset{}
+		if err := rows.Scan(
+			&a.ID, &a.OwnerID, &a.Title, &a.Description, &a.Tags,
+			&a.PriceCents, &a.ThumbnailPath, &a.ModelPath,
+			&a.CreatedAt, &a.UpdatedAt,
+			&a.AuthorName, &a.AuthorUsername, &a.AuthorAvatarPath,
+		); err != nil {
+			return nil, fmt.Errorf("scan trending row: %w", err)
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate trending: %w", err)
+	}
+	return out, nil
+}
+
 // ListTagsWithCounts devolve cada tag distinta com a quantidade de
 // assets que a possuem. Usado pelo chip bar da galeria pra mostrar
 // "fantasia (12)" sem o frontend precisar baixar todos os assets só
@@ -274,6 +402,59 @@ func (r *AssetRepository) Delete(ctx context.Context, id, ownerID int64) (thumbn
 		return "", "", fmt.Errorf("delete asset: %w", err)
 	}
 	return thumbnailPath, modelPath, nil
+}
+
+// UpdateThumbnail troca o caminho da thumbnail e devolve o anterior
+// pra cleanup do arquivo no disco. Mesmo padrão transacional dos
+// avatares de usuário: dois POSTs concorrentes não deixam arquivo
+// órfão no DB.
+//
+// Ownership é checada DENTRO da transação. 404 vs 403 separados pelo
+// mesmo motivo que Update/Delete (UX e diagnostic).
+func (r *AssetRepository) UpdateThumbnail(ctx context.Context, id, ownerID int64, newPath string) (oldPath string, err error) {
+	return r.swapFilePath(ctx, id, ownerID, "thumbnail_path", newPath)
+}
+
+// UpdateModel é o gêmeo de UpdateThumbnail pra o .glb/.gltf. Mesma
+// semântica.
+func (r *AssetRepository) UpdateModel(ctx context.Context, id, ownerID int64, newPath string) (oldPath string, err error) {
+	return r.swapFilePath(ctx, id, ownerID, "model_path", newPath)
+}
+
+// swapFilePath é a primitiva que UpdateThumbnail e UpdateModel
+// compartilham. Recebe o nome da coluna como parâmetro — controlado
+// internamente, NUNCA vindo de input, então a interpolação é segura
+// (não há SQL injection possível).
+func (r *AssetRepository) swapFilePath(ctx context.Context, id, ownerID int64, column, newPath string) (string, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("begin tx (swap %s): %w", column, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var actualOwner int64
+	var existingPath string
+	checkQ := `SELECT owner_id, ` + column + ` FROM assets WHERE id = $1`
+	if err := tx.QueryRow(ctx, checkQ, id).Scan(&actualOwner, &existingPath); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", domain.ErrAssetNotFound
+		}
+		return "", fmt.Errorf("check asset for swap: %w", err)
+	}
+	if actualOwner != ownerID {
+		return "", domain.ErrAssetForbidden
+	}
+
+	updateQ := `UPDATE assets SET ` + column + ` = $1, updated_at = NOW() WHERE id = $2`
+	if _, err := tx.Exec(ctx, updateQ, newPath, id); err != nil {
+		return "", fmt.Errorf("update %s: %w", column, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("commit swap %s: %w", column, err)
+	}
+
+	return existingPath, nil
 }
 
 // assetOwnership separa "existe?" de "é seu?". Faz uma única ida ao
