@@ -12,7 +12,12 @@
       href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap"
       rel="stylesheet"
     />
-    <title>Lojinha dos meus assets</title>
+    <!-- Preconnect com o backend warmup o handshake (DNS + TCP + TLS)
+         ANTES do primeiro fetch JS. Sem isso, o request inicial de
+         /api/v1/assets paga ~50-200ms de latência de conexão.
+         %VITE_API_BASE_URL% é expandido no build do Vite a partir do .env. -->
+    <link rel="preconnect" href="%VITE_API_BASE_URL%" crossorigin />
+    <title>ManoMesh — Mercado de assets 3D</title>
   </head>
   <body>
     <div id="root"></div>

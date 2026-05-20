@@ -1,6 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api, type Asset, type PublicUser, type TagCount } from '../api/client'
+import { ASSET_GRID_CLASSES } from '../styles/pixel'
 import AssetCard from '../components/AssetCard'
 import AssetCardSkeleton from '../components/AssetCardSkeleton'
 import Avatar from '../components/Avatar'
@@ -26,8 +35,6 @@ import Avatar from '../components/Avatar'
 //   assets:Asset[]  + error === null  → grid de cards (filtrado se aplicável)
 
 const SKELETON_COUNT = 8
-const GRID_CLASSES =
-  'grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6'
 // Primeiros 4 cards assumimos acima da dobra (4 colunas). Recebem
 // fetchpriority=high para acelerar o LCP.
 const PRIORITY_COUNT = 4
@@ -56,7 +63,17 @@ export default function Gallery() {
   // filtro". Query é trimmed só na hora de filtrar; o input controlado
   // deixa o usuário ver os espaços que digitou.
   const [searchParams, setSearchParams] = useSearchParams()
-  const selectedTag = searchParams.get('tag')
+  // selectedTags vem de TODOS os `?tag=` repetidos na URL.
+  // `?tag=fantasia&tag=rpg` → ['fantasia', 'rpg']. Backward-compat:
+  // links antigos `?tag=fantasia` continuam funcionando (array de 1).
+  //
+  // useMemo pra que o array tenha referência estável enquanto a URL
+  // não muda — senão `selectedTags.includes(...)` dispararia
+  // useEffect/useMemo de filhos a cada render do pai.
+  const selectedTags = useMemo<string[]>(
+    () => searchParams.getAll('tag'),
+    [searchParams],
+  )
   const query = searchParams.get('q') ?? ''
   // sort: chave do dropdown. Mantida como string + parser pra que valor
   // inválido na URL caia no default (recent) sem crashar a página.
@@ -89,13 +106,43 @@ export default function Gallery() {
     [setSearchParams],
   )
 
-  // Wrappers tipados pros consumers. setSelectedTag mantém a API
-  // antiga (string | null) que TagFilter espera. setQuery usa
-  // push=false porque digitação produz muitos updates.
-  const setSelectedTag = useCallback(
-    (tag: string | null, push = true) => setParam('tag', tag, push),
-    [setParam],
+  // toggleTag: adiciona ou remove uma tag do array.
+  //   - Tag já está → remove (URL sem mais aquele ?tag=X)
+  //   - Tag não está → adiciona (URL ganha ?tag=X extra)
+  //
+  // searchParams.delete(key, value) precisa do valor pra deletar UM
+  // dos múltiplos `?tag=`. Sem value, deleta TODOS os ?tag=. API
+  // confirmada em URL Living Standard.
+  const toggleTag = useCallback(
+    (tag: string) => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev)
+        const all = next.getAll('tag')
+        if (all.includes(tag)) {
+          // Re-set a lista sem o tag toggleado. Não dá pra usar
+          // delete(key, value) com segurança em todos os browsers,
+          // então recompõe.
+          next.delete('tag')
+          for (const t of all) {
+            if (t !== tag) next.append('tag', t)
+          }
+        } else {
+          next.append('tag', tag)
+        }
+        return next
+      })
+    },
+    [setSearchParams],
   )
+
+  const clearTags = useCallback(() => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      next.delete('tag')
+      return next
+    })
+  }, [setSearchParams])
+
   const setQuery = useCallback(
     (q: string) => setParam('q', q.trim() || null, false),
     [setParam],
@@ -185,61 +232,70 @@ export default function Gallery() {
   // de verdade — o front não precisa contar nada.
   const tags = useMemo<TagCount[]>(() => tagCounts ?? [], [tagCounts])
 
-  // filteredAssets: AND entre selectedTag, query e faixa de preço,
-  // depois sort. Match case-insensitive na busca pra que "ESPADA"
-  // case com "espada do herói". O sort cria uma cópia antes de
-  // ordenar — não mutar o array original.
+  // filteredAssets: combinação de facets.
+  //   - busca: substring no título (AND com o resto)
+  //   - faixa de preço: limites min/max (AND)
+  //   - tags: OR entre as selecionadas, AND com os outros facets
   //
-  // Preço: comparamos em centavos pra evitar float math. priceMin/Max
-  // vêm em reais (number), multiplico por 100 inline. null = sem
-  // limite naquele lado.
+  // "OR dentro do facet, AND entre facets" é o padrão de marketplace:
+  // selecionar mais tags amplia o resultado; selecionar tag + preço
+  // restringe.
   const filteredAssets = useMemo<Asset[] | null>(() => {
     if (!assets) return null
     const needle = query.trim().toLowerCase()
     const minCents = priceMin !== null ? Math.round(priceMin * 100) : null
     const maxCents = priceMax !== null ? Math.round(priceMax * 100) : null
+    const tagSet = new Set(selectedTags) // lookup O(1) por asset
     const filtered = assets.filter((a) => {
-      if (selectedTag && !a.tags.includes(selectedTag)) return false
+      // OR entre tags selecionadas: asset passa se TIVER PELO MENOS
+      // uma das tags do filtro. Set vazio = sem filtro de tag.
+      if (tagSet.size > 0 && !a.tags.some((t) => tagSet.has(t))) {
+        return false
+      }
       if (needle && !a.title.toLowerCase().includes(needle)) return false
       if (minCents !== null && a.price_cents < minCents) return false
       if (maxCents !== null && a.price_cents > maxCents) return false
       return true
     })
     return sortAssets(filtered, sort)
-  }, [assets, selectedTag, query, sort, priceMin, priceMax])
+  }, [assets, selectedTags, query, sort, priceMin, priceMax])
 
-  // Se o usuário tinha um filtro ativo e a tag não existe mais (asset
-  // deletado, refresh trouxe lista sem ela) OU o usuário digitou
-  // ?tag=naoexiste manualmente — limpa o filtro pra evitar empty
-  // state confuso. push=false para não poluir o histórico com a
-  // correção automática.
+  // Auto-clean: se alguma tag selecionada não existe mais no catálogo
+  // (asset deletado, ou usuário digitou ?tag=naoexiste), remove só
+  // ELA da URL — preserva as válidas. Replace pra não poluir histórico.
   useEffect(() => {
-    if (
-      selectedTag &&
-      tags.length > 0 &&
-      !tags.some((t) => t.tag === selectedTag)
-    ) {
-      setSelectedTag(null, false)
-    }
-  }, [tags, selectedTag, setSelectedTag])
+    if (tags.length === 0 || selectedTags.length === 0) return
+    const validNames = new Set(tags.map((t) => t.tag))
+    const invalid = selectedTags.filter((t) => !validNames.has(t))
+    if (invalid.length === 0) return
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        const surviving = next.getAll('tag').filter((t) => validNames.has(t))
+        next.delete('tag')
+        for (const t of surviving) next.append('tag', t)
+        return next
+      },
+      { replace: true },
+    )
+  }, [tags, selectedTags, setSearchParams])
 
   const hasPriceFilter = priceMin !== null || priceMax !== null
+  const hasTagFilter = selectedTags.length > 0
   const hasFilter =
-    selectedTag !== null || query.trim() !== '' || hasPriceFilter
+    hasTagFilter || query.trim() !== '' || hasPriceFilter
 
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-6">
       <Hero
         totalCount={error ? null : assets?.length ?? null}
         filteredCount={filteredAssets?.length ?? null}
-        selectedTag={selectedTag}
+        selectedTags={selectedTags}
         query={query}
-        sort={sort}
         priceMin={priceMin}
         priceMax={priceMax}
         loading={!error && assets === null}
         onQueryChange={setQuery}
-        onSortChange={setSort}
       />
       {/* "Em alta": só renderiza quando NÃO há filtro ativo (em
           contexto de descoberta livre, não busca). Se a lista voltar
@@ -253,24 +309,23 @@ export default function Gallery() {
       {!hasFilter && topCreators && topCreators.length > 0 && (
         <TopCreatorsSection users={topCreators} />
       )}
-      {/* Filtros auxiliares (preço) aparecem quando há assets. Linha
-          própria porque a Hero já está densa e o TagFilter cresce
-          variavelmente. */}
+      {/* FilterBar: barra horizontal de botões-dropdown (Tags, Preço,
+          Sort) no estilo de marketplaces modernos. Cada botão abre um
+          painel logo abaixo com os controles reais. */}
       {assets && assets.length > 0 && (
-        <PriceFilter
-          min={searchParams.get('min') ?? ''}
-          max={searchParams.get('max') ?? ''}
-          onMinChange={setPriceMin}
-          onMaxChange={setPriceMax}
-        />
-      )}
-      {/* TagFilter só aparece quando temos assets e há tags pra escolher.
-          Esconder em loading/erro/vazio evita botões fantasmas. */}
-      {assets && tags.length > 0 && (
-        <TagFilter
+        <FilterBar
           tags={tags}
-          selected={selectedTag}
-          onSelect={setSelectedTag}
+          selectedTags={selectedTags}
+          onToggleTag={toggleTag}
+          onClearTags={clearTags}
+          priceMin={searchParams.get('min') ?? ''}
+          priceMax={searchParams.get('max') ?? ''}
+          onPriceMinChange={setPriceMin}
+          onPriceMaxChange={setPriceMax}
+          sort={sort}
+          onSortChange={setSort}
+          hasAnyFilter={hasFilter}
+          onClearAll={clearAllFilters}
         />
       )}
       <Content
@@ -278,7 +333,7 @@ export default function Gallery() {
         rawAssets={assets}
         error={error}
         onRetry={load}
-        selectedTag={selectedTag}
+        selectedTags={selectedTags}
         query={query}
         hasFilter={hasFilter}
         onClearFilters={clearAllFilters}
@@ -295,25 +350,21 @@ export default function Gallery() {
 function Hero({
   totalCount,
   filteredCount,
-  selectedTag,
+  selectedTags,
   query,
-  sort,
   priceMin,
   priceMax,
   loading,
   onQueryChange,
-  onSortChange,
 }: {
   totalCount: number | null
   filteredCount: number | null
-  selectedTag: string | null
+  selectedTags: string[]
   query: string
-  sort: SortKey
   priceMin: number | null
   priceMax: number | null
   loading: boolean
   onQueryChange: (q: string) => void
-  onSortChange: (s: SortKey) => void
 }) {
   return (
     <header className="bg-parchment border-4 border-ink shadow-pixel">
@@ -330,7 +381,7 @@ function Hero({
             {subtitle(
               totalCount,
               filteredCount,
-              selectedTag,
+              selectedTags,
               query,
               priceMin,
               priceMax,
@@ -338,104 +389,45 @@ function Hero({
             )}
           </p>
         </div>
-        {/* Bloco de controles: busca + sort. flex-col em telas menores
-            empilha; em desktop fica lado a lado. */}
-        <div className="w-full sm:w-auto flex flex-col sm:flex-row gap-2">
-          {/* Input de busca. role="search" + label sr-only para
-              leitores de tela; o placeholder + ícone ▸ comunicam
-              a intenção visualmente. */}
-          <form
-            role="search"
-            onSubmit={(e) => e.preventDefault()}
-            className="w-full sm:w-56"
-          >
-            <label className="block">
-              <span className="sr-only">Buscar pelo título</span>
-              <div className="relative">
-                <span
-                  aria-hidden="true"
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-ink/60 text-xs"
-                >
-                  ▸
-                </span>
-                <input
-                  type="search"
-                  value={query}
-                  onChange={(e) => onQueryChange(e.target.value)}
-                  placeholder="Buscar pelo título..."
-                  className="
-                    w-full bg-white text-ink border-4 border-ink
-                    pl-8 pr-3 py-2 text-xs uppercase tracking-widest font-bold
-                    focus:outline-none focus:shadow-pixel-sm
-                  "
-                />
-              </div>
-            </label>
-          </form>
-          <SortDropdown sort={sort} onChange={onSortChange} />
-        </div>
+        {/* Input de busca isolado na Hero — busca é entrada livre,
+            distinta dos filtros categóricos da FilterBar abaixo. */}
+        <form
+          role="search"
+          onSubmit={(e) => e.preventDefault()}
+          className="w-full sm:w-64"
+        >
+          <label className="block">
+            <span className="sr-only">Buscar pelo título</span>
+            <div className="relative">
+              <span
+                aria-hidden="true"
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-ink/60 text-xs"
+              >
+                ▸
+              </span>
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => onQueryChange(e.target.value)}
+                placeholder="Buscar pelo título..."
+                className="
+                  w-full bg-white text-ink border-4 border-ink
+                  pl-8 pr-3 py-2 text-xs uppercase tracking-widest font-bold
+                  focus:outline-none focus:shadow-pixel-sm
+                "
+              />
+            </div>
+          </label>
+        </form>
       </div>
     </header>
-  )
-}
-
-// SortDropdown: select nativo estilizado pixel-art. Native select é
-// melhor que um menu custom porque:
-//   - acessível por teclado de graça
-//   - mobile dá o picker nativo
-//   - menos código pra manter
-//
-// O appearance-none + ícone manual recria o visual sem perder a
-// semântica do <select>.
-function SortDropdown({
-  sort,
-  onChange,
-}: {
-  sort: SortKey
-  onChange: (s: SortKey) => void
-}) {
-  return (
-    <label className="block w-full sm:w-auto">
-      <span className="sr-only">Ordenar por</span>
-      <div className="relative">
-        <span
-          aria-hidden="true"
-          className="absolute left-3 top-1/2 -translate-y-1/2 text-ink/60 text-xs"
-        >
-          ↕
-        </span>
-        <select
-          value={sort}
-          onChange={(e) => onChange(e.target.value as SortKey)}
-          className="
-            w-full bg-white text-ink border-4 border-ink
-            pl-8 pr-8 py-2 text-xs uppercase tracking-widest font-bold
-            appearance-none
-            focus:outline-none focus:shadow-pixel-sm
-            cursor-pointer
-          "
-        >
-          {SORT_OPTIONS.map(({ key, label }) => (
-            <option key={key} value={key}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <span
-          aria-hidden="true"
-          className="absolute right-3 top-1/2 -translate-y-1/2 text-ink/60 text-xs pointer-events-none"
-        >
-          ▾
-        </span>
-      </div>
-    </label>
   )
 }
 
 function subtitle(
   totalCount: number | null,
   filteredCount: number | null,
-  selectedTag: string | null,
+  selectedTags: string[],
   query: string,
   priceMin: number | null,
   priceMax: number | null,
@@ -445,13 +437,19 @@ function subtitle(
   if (totalCount === null) return 'Falha ao carregar'
   if (totalCount === 0) return 'Inventário vazio'
 
-  // Qualquer filtro ativo (tag, busca, faixa de preço) → "X de Y" + breakdown.
+  // Qualquer filtro ativo → "X de Y" + breakdown. Tags com 3+
+  // selecionadas viram "tags: 3 selecionadas" pra não poluir o
+  // subtitle (linha única, espaço limitado).
   const hasQuery = query.trim() !== ''
   const hasPrice = priceMin !== null || priceMax !== null
-  if (selectedTag || hasQuery || hasPrice) {
+  const hasTags = selectedTags.length > 0
+  if (hasTags || hasQuery || hasPrice) {
     const n = filteredCount ?? 0
     const parts: string[] = []
-    if (selectedTag) parts.push(`tag: ${selectedTag}`)
+    if (hasTags) {
+      if (selectedTags.length <= 2) parts.push(`tags: ${selectedTags.join(', ')}`)
+      else parts.push(`${selectedTags.length} tags`)
+    }
     if (hasQuery) parts.push(`busca: "${query.trim()}"`)
     if (hasPrice) parts.push(`preço: ${formatPriceRange(priceMin, priceMax)}`)
     return `${n} de ${totalCount} · ${parts.join(' · ')}`
@@ -469,45 +467,411 @@ function formatPriceRange(min: number | null, max: number | null): string {
   return ''
 }
 
-// TagFilter: linha de chips horizontais com flex-wrap. Cada chip é
-// um botão pixel-art; o ativo recebe cores invertidas (bg-arcane).
-// Chip "Todos" no início serve como reset do filtro.
+// FilterBar: barra horizontal de botões-dropdown no estilo de
+// marketplaces modernos (Style ∨, Price ∨, Sort by ∨ …).
 //
-// A contagem aparece com cor reduzida (text-X/60) e fonte um pouco
-// menor — afirma a info sem competir com a tag em si.
-function TagFilter({
+// Cada botão exibe:
+//   - Label da categoria ("Tags", "Preço", "Ordenar por")
+//   - Badge entre parênteses com o estado atual: "(3)" tags selecionadas,
+//     "(R$10-50)" range, "(A-Z)" sort label. Permite ler o filtro sem
+//     abrir o painel.
+//   - Chevron ▾ indicando "abrível".
+//
+// Estados visuais:
+//   - default: bg-parchment text-ink
+//   - active (filtro aplicado OU painel aberto): bg-arcane text-parchment
+//
+// "Limpar tudo" aparece à direita quando há QUALQUER filtro ativo,
+// fora dos dropdowns — ação destrutiva merece visibilidade própria.
+const FilterBar = memo(function FilterBar({
   tags,
-  selected,
-  onSelect,
+  selectedTags,
+  onToggleTag,
+  onClearTags,
+  priceMin,
+  priceMax,
+  onPriceMinChange,
+  onPriceMaxChange,
+  sort,
+  onSortChange,
+  hasAnyFilter,
+  onClearAll,
 }: {
   tags: TagCount[]
-  selected: string | null
-  onSelect: (tag: string | null) => void
+  selectedTags: string[]
+  onToggleTag: (tag: string) => void
+  onClearTags: () => void
+  priceMin: string
+  priceMax: string
+  onPriceMinChange: (v: string) => void
+  onPriceMaxChange: (v: string) => void
+  sort: SortKey
+  onSortChange: (s: SortKey) => void
+  hasAnyFilter: boolean
+  onClearAll: () => void
 }) {
-  // Total = soma de todas as ocorrências de tag no catálogo, NÃO o
-  // número de assets distintos (um asset com 3 tags conta 3x). Pra
-  // UX do filtro "Todos", o valor é o melhor proxy disponível sem
-  // outra request.
-  const total = tags.reduce((acc, t) => acc + t.count, 0)
+  // Contagem total de filtros ativos pra mostrar no label "▶ Filtros".
+  // Tags conta por seleção; preço conta 1 se tem ALGUM dos lados;
+  // sort conta 1 se não for o default.
+  const priceCount = priceMin !== '' || priceMax !== '' ? 1 : 0
+  const sortCount = sort !== 'recent' ? 1 : 0
+  const activeCount = selectedTags.length + priceCount + sortCount
+
   return (
     <div
-      role="toolbar"
-      aria-label="Filtrar por tag"
-      className="bg-parchment border-4 border-ink shadow-pixel p-3 flex flex-wrap gap-2"
+      role="region"
+      aria-label="Filtros do catálogo"
+      className="bg-parchment border-4 border-ink shadow-pixel px-3 py-2 flex flex-wrap items-center gap-2"
     >
-      <Chip active={selected === null} onClick={() => onSelect(null)}>
-        Todos <span className="opacity-60">({total})</span>
-      </Chip>
-      {tags.map(({ tag, count }) => (
-        <Chip
-          key={tag}
-          active={selected === tag}
-          onClick={() => onSelect(tag)}
+      {/* LEFT — label "▶ Filtros" com badge de contagem. Apenas
+          decorativo: comunica o que esta barra faz e quantos filtros
+          estão ativos. */}
+      <span
+        className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest text-ink/70"
+        aria-label={`${activeCount} filtros ativos`}
+      >
+        <span aria-hidden="true">▶ Filtros</span>
+        {activeCount > 0 && (
+          <span className="bg-arcane text-parchment border border-ink px-1 text-[9px]">
+            {activeCount}
+          </span>
+        )}
+      </span>
+
+      {/* Spacer flex-grow empurra os componentes pra direita.
+          Mais leve que pendurar ml-auto em cada dropdown ou propagar
+          className via props. Quando a barra quebra em wrap (mobile),
+          o spacer some naturalmente. */}
+      <div className="ml-auto" aria-hidden="true" />
+
+      {/* RIGHT — todos os componentes interativos */}
+      <TagsDropdown
+        tags={tags}
+        selectedTags={selectedTags}
+        onToggleTag={onToggleTag}
+        onClearTags={onClearTags}
+      />
+      <PriceDropdown
+        min={priceMin}
+        max={priceMax}
+        onMinChange={onPriceMinChange}
+        onMaxChange={onPriceMaxChange}
+      />
+      <SortDropdown sort={sort} onChange={onSortChange} />
+      {hasAnyFilter && (
+        <button
+          type="button"
+          onClick={onClearAll}
+          className="
+            text-[10px] uppercase tracking-widest font-bold
+            border-2 border-ink shadow-pixel-sm
+            bg-ink text-parchment px-2 py-1
+            transition-all duration-75 ease-out
+            hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none
+          "
         >
-          {tag} <span className="opacity-60">({count})</span>
-        </Chip>
-      ))}
+          ✗ Limpar tudo
+        </button>
+      )}
     </div>
+  )
+})
+
+// FilterDropdown: bloco reusable botão + popover.
+//
+// Responsabilidades:
+//   - Renderiza o botão pixel-art com label + badge + chevron
+//   - Abre/fecha popover ao clicar
+//   - Click-outside fecha (capturando mousedown)
+//   - Esc fecha
+//   - Popover é absolutamente posicionado abaixo do botão
+//   - Estado active quando: painel aberto OU `isActive=true` (filtro aplicado)
+//
+// Cada filtro específico (Tags/Price/Sort) chama este componente
+// e passa seu conteúdo como children. Mantemos o `useState` aberto
+// dentro do FilterDropdown — sem hoisting que complicaria os pais.
+function FilterDropdown({
+  label,
+  badge,
+  isActive,
+  align = 'left',
+  children,
+}: {
+  label: string
+  badge?: string | null
+  isActive: boolean
+  // align: 'left' alinha o painel ao botão (default); 'right'
+  // alinha pela direita (útil pra dropdowns na extremidade direita
+  // que senão estourariam pra fora da viewport).
+  align?: 'left' | 'right'
+  children: (close: () => void) => ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  const wrapperRef = useRef<HTMLDivElement>(null)
+
+  // Click-outside + Esc fecham. Listener só quando aberto pra não
+  // pendurar event handlers em todos os dropdowns simultaneamente.
+  useEffect(() => {
+    if (!open) return
+    function onMouse(e: MouseEvent) {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onMouse)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onMouse)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  // Botão "active" tanto quando aberto quanto quando o filtro está
+  // aplicado — dá feedback visual consistente.
+  const buttonActive = open || isActive
+  const bg = buttonActive
+    ? 'bg-arcane text-parchment'
+    : 'bg-parchment text-ink'
+
+  return (
+    <div ref={wrapperRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        className={`
+          ${bg} border-2 border-ink shadow-pixel-sm
+          px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest
+          inline-flex items-center gap-2
+          transition-all duration-75 ease-out
+          hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none
+        `}
+      >
+        <span>{label}</span>
+        {badge && <span className="opacity-80">({badge})</span>}
+        <span aria-hidden="true" className="text-[8px]">
+          ▾
+        </span>
+      </button>
+      {open && (
+        <div
+          role="dialog"
+          className={`
+            absolute top-full mt-1 z-20
+            bg-parchment border-4 border-ink shadow-pixel
+            p-3 min-w-[240px]
+            ${align === 'right' ? 'right-0' : 'left-0'}
+          `}
+        >
+          {children(() => setOpen(false))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// TagsDropdown: chips multi-select dentro de um popover scrollavel.
+// Badge mostra contagem de tags selecionadas.
+function TagsDropdown({
+  tags,
+  selectedTags,
+  onToggleTag,
+  onClearTags,
+}: {
+  tags: TagCount[]
+  selectedTags: string[]
+  onToggleTag: (tag: string) => void
+  onClearTags: () => void
+}) {
+  const selectedSet = useMemo(() => new Set(selectedTags), [selectedTags])
+  const badge = selectedTags.length > 0 ? String(selectedTags.length) : null
+
+  return (
+    <FilterDropdown label="Tags" badge={badge} isActive={selectedTags.length > 0}>
+      {() => (
+        <div className="space-y-2 max-w-xs">
+          {/* max-h limita altura pra catálogos com muitas tags. */}
+          <div className="flex flex-wrap gap-2 max-h-64 overflow-y-auto">
+            {tags.map(({ tag, count }) => (
+              <Chip
+                key={tag}
+                active={selectedSet.has(tag)}
+                onClick={() => onToggleTag(tag)}
+                label={`${tag} (${count})`}
+              />
+            ))}
+          </div>
+          {selectedTags.length > 0 && (
+            <button
+              type="button"
+              onClick={onClearTags}
+              className="text-[10px] uppercase tracking-widest font-bold underline underline-offset-4 decoration-2 hover:text-arcane"
+            >
+              ✗ Limpar tags
+            </button>
+          )}
+        </div>
+      )}
+    </FilterDropdown>
+  )
+}
+
+// PriceDropdown: 2 inputs Min/Max dentro do popover. Badge resume o range.
+function PriceDropdown({
+  min,
+  max,
+  onMinChange,
+  onMaxChange,
+}: {
+  min: string
+  max: string
+  onMinChange: (v: string) => void
+  onMaxChange: (v: string) => void
+}) {
+  const hasPrice = min !== '' || max !== ''
+  const badge = hasPrice ? formatPriceBadge(min, max) : null
+
+  return (
+    <FilterDropdown label="Preço" badge={badge} isActive={hasPrice}>
+      {() => (
+        <div className="space-y-3 min-w-[220px]">
+          <div className="flex items-center gap-2">
+            <PriceInput
+              label="Min"
+              value={min}
+              onChange={onMinChange}
+              placeholder="0"
+            />
+            <span className="text-ink/40">—</span>
+            <PriceInput
+              label="Max"
+              value={max}
+              onChange={onMaxChange}
+              placeholder="∞"
+            />
+          </div>
+          {hasPrice && (
+            <button
+              type="button"
+              onClick={() => {
+                onMinChange('')
+                onMaxChange('')
+              }}
+              className="text-[10px] uppercase tracking-widest font-bold underline underline-offset-4 decoration-2 hover:text-arcane"
+            >
+              ✗ Limpar preço
+            </button>
+          )}
+        </div>
+      )}
+    </FilterDropdown>
+  )
+}
+
+// formatPriceBadge: "10-50" / "10+" / "≤50". Compacto pro botão.
+function formatPriceBadge(min: string, max: string): string {
+  if (min && max) return `R$${min}-${max}`
+  if (min) return `R$${min}+`
+  return `≤R$${max}`
+}
+
+// SortDropdown: lista de opções selectionable. Cada opção é um
+// botão que fecha o popover ao escolher. Badge mostra a opção
+// ativa (ex: "Mais recentes").
+function SortDropdown({
+  sort,
+  onChange,
+}: {
+  sort: SortKey
+  onChange: (s: SortKey) => void
+}) {
+  const current = SORT_OPTIONS.find((o) => o.key === sort)
+  // Quando sort = 'recent' (default), não mostramos badge — é o
+  // estado "não-modificado". Outros viram badge pra reforçar a
+  // escolha do usuário.
+  const badge = sort !== 'recent' ? current?.label ?? null : null
+
+  return (
+    <FilterDropdown
+      label="Ordenar por"
+      badge={badge}
+      isActive={sort !== 'recent'}
+      align="right"
+    >
+      {(close) => (
+        <ul role="menu" className="space-y-1 min-w-[180px]">
+          {SORT_OPTIONS.map(({ key, label }) => {
+            const isCurrent = key === sort
+            return (
+              <li key={key} role="none">
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={isCurrent}
+                  onClick={() => {
+                    onChange(key)
+                    close()
+                  }}
+                  className={`
+                    w-full text-left px-2 py-1.5
+                    text-[10px] font-bold uppercase tracking-widest
+                    transition-colors duration-75
+                    ${
+                      isCurrent
+                        ? 'bg-arcane text-parchment'
+                        : 'bg-parchment text-ink hover:bg-ink/10'
+                    }
+                  `}
+                >
+                  {isCurrent ? '▶ ' : ''}
+                  {label}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </FilterDropdown>
+  )
+}
+
+// PriceInput: label + input numérico curto. Reusado dentro do
+// PriceDropdown pros campos Min e Max.
+function PriceInput({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  placeholder: string
+}) {
+  return (
+    <label className="flex items-center gap-2">
+      <span className="text-[10px] uppercase tracking-wider text-ink/60">
+        {label}
+      </span>
+      <input
+        type="number"
+        inputMode="decimal"
+        min="0"
+        step="1"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="
+          w-20 bg-white text-ink border-2 border-ink
+          px-2 py-1 text-xs font-mono
+          focus:outline-none focus:shadow-pixel-sm
+        "
+      />
+    </label>
   )
 }
 
@@ -515,14 +879,19 @@ function TagFilter({
 // (arcane); inactive = parchment. Os dois respondem ao hover-press
 // padrão pra dar feedback tátil. aria-pressed comunica o estado pra
 // leitor de tela.
+//
+// API mudou: antes recebia `children: ReactNode` (não-estável,
+// quebrava memo); agora recebe `label: string`. Sem memo aqui
+// porque `onClick` continua sendo arrow inline no caller (mas o
+// custo de re-render de N botões pequenos é baixo).
 function Chip({
   active,
   onClick,
-  children,
+  label,
 }: {
   active: boolean
   onClick: () => void
-  children: React.ReactNode
+  label: string
 }) {
   const base =
     'px-3 py-1 text-[10px] font-bold uppercase tracking-widest ' +
@@ -540,7 +909,7 @@ function Chip({
       aria-pressed={active}
       className={`${base} ${color}`}
     >
-      {children}
+      {label}
     </button>
   )
 }
@@ -553,7 +922,7 @@ function Content({
   rawAssets,
   error,
   onRetry,
-  selectedTag,
+  selectedTags,
   query,
   hasFilter,
   onClearFilters,
@@ -562,7 +931,7 @@ function Content({
   rawAssets: Asset[] | null
   error: string | null
   onRetry: () => void
-  selectedTag: string | null
+  selectedTags: string[]
   query: string
   hasFilter: boolean
   onClearFilters: () => void
@@ -593,7 +962,7 @@ function Content({
 
   if (assets === null) {
     return (
-      <div className={GRID_CLASSES} aria-busy="true" aria-live="polite">
+      <div className={ASSET_GRID_CLASSES} aria-busy="true" aria-live="polite">
         {Array.from({ length: SKELETON_COUNT }).map((_, i) => (
           <AssetCardSkeleton key={i} />
         ))}
@@ -623,13 +992,24 @@ function Content({
   // "Sem resultados" genérico.
   if (assets.length === 0 && hasFilter) {
     const hasQuery = query.trim() !== ''
+    // Mensagem do empty state varia conforme o filtro ativo. Não
+    // tentamos enumerar todas as combinações (tag+busca+preço); usamos
+    // uma mensagem genérica quando o usuário tem múltiplos filtros.
+    const hasTags = selectedTags.length > 0
     let message: string
-    if (selectedTag && hasQuery) {
-      message = `Nada com "${query.trim()}" na tag "${selectedTag}"`
-    } else if (selectedTag) {
-      message = `Nenhum asset com a tag "${selectedTag}"`
-    } else {
+    if (hasTags && hasQuery) {
+      const label = selectedTags.length === 1 ? selectedTags[0] : `${selectedTags.length} tags`
+      message = `Nada com "${query.trim()}" em ${label}`
+    } else if (hasTags) {
+      if (selectedTags.length === 1) {
+        message = `Nenhum asset com a tag "${selectedTags[0]}"`
+      } else {
+        message = `Nenhum asset com as ${selectedTags.length} tags selecionadas`
+      }
+    } else if (hasQuery) {
       message = `Nada combinou com "${query.trim()}"`
+    } else {
+      message = 'Nenhum asset combina com os filtros'
     }
     return (
       <div className="bg-parchment border-4 border-ink shadow-pixel p-12 text-center">
@@ -655,7 +1035,7 @@ function Content({
   }
 
   return (
-    <div className={GRID_CLASSES}>
+    <div className={ASSET_GRID_CLASSES}>
       {assets.map((asset, i) => (
         <AssetCard
           key={asset.id}
@@ -674,7 +1054,14 @@ function Content({
 // Cards renderizados com `priority={true}` porque a sessão fica
 // above-the-fold antes do catálogo principal — vale fetchpriority
 // alto nas thumbnails pra LCP.
-function TrendingSection({ assets }: { assets: Asset[] }) {
+//
+// memo: `assets` é set uma vez no load e nunca mais; digitar na
+// busca não re-renderiza este componente.
+const TrendingSection = memo(function TrendingSection({
+  assets,
+}: {
+  assets: Asset[]
+}) {
   return (
     <section className="bg-parchment border-4 border-ink shadow-pixel">
       <h2 className="bg-arcane text-parchment font-pixel text-xs uppercase border-b-4 border-ink px-4 py-3">
@@ -689,14 +1076,18 @@ function TrendingSection({ assets }: { assets: Asset[] }) {
       </div>
     </section>
   )
-}
+})
 
 // TopCreatorsSection: sessão "Top criadores" no topo da galeria.
 // Mesma motivação visual do TrendingSection mas com cards menores
 // (4 colunas independente do breakpoint maior, pra caber mais).
 //
 // "Ver todos" no header leva pra /criadores (diretório completo).
-function TopCreatorsSection({ users }: { users: PublicUser[] }) {
+const TopCreatorsSection = memo(function TopCreatorsSection({
+  users,
+}: {
+  users: PublicUser[]
+}) {
   return (
     <section className="bg-parchment border-4 border-ink shadow-pixel">
       <div className="bg-arcane text-parchment font-pixel text-xs uppercase border-b-4 border-ink px-4 py-3 flex items-center justify-between">
@@ -717,12 +1108,16 @@ function TopCreatorsSection({ users }: { users: PublicUser[] }) {
       </div>
     </section>
   )
-}
+})
 
 // TopCreatorCard: mini-card horizontal compacto pra encaixar no grid
 // 2/4 colunas. Não duplica o CreatorCard de /criadores porque aqui
 // queremos algo mais denso (4 numa linha) — esse é wide e enxuto.
-function TopCreatorCard({ user }: { user: PublicUser }) {
+const TopCreatorCard = memo(function TopCreatorCard({
+  user,
+}: {
+  user: PublicUser
+}) {
   const count = user.asset_count ?? 0
   return (
     <Link
@@ -753,88 +1148,7 @@ function TopCreatorCard({ user }: { user: PublicUser }) {
       </div>
     </Link>
   )
-}
-
-// PriceFilter: dois inputs numéricos lado a lado (Min e Max).
-// inputs nativos type=number pra UX (teclado numérico em mobile) +
-// validação básica de browser. Aceita vazio = sem limite.
-//
-// Os valores são strings (não números) aqui porque o usuário digita
-// e queremos mostrar exatamente o que ele escreveu. parsePrice cuida
-// da conversão na hora de filtrar.
-function PriceFilter({
-  min,
-  max,
-  onMinChange,
-  onMaxChange,
-}: {
-  min: string
-  max: string
-  onMinChange: (v: string) => void
-  onMaxChange: (v: string) => void
-}) {
-  return (
-    <div
-      role="group"
-      aria-label="Filtrar por faixa de preço"
-      className="bg-parchment border-4 border-ink shadow-pixel p-3 flex flex-wrap items-center gap-3"
-    >
-      <span className="text-[10px] font-bold uppercase tracking-widest text-ink/70">
-        ▸ Preço (R$)
-      </span>
-      <label className="flex items-center gap-2">
-        <span className="text-[10px] uppercase tracking-wider text-ink/60">
-          Min
-        </span>
-        <input
-          type="number"
-          inputMode="decimal"
-          min="0"
-          step="1"
-          value={min}
-          onChange={(e) => onMinChange(e.target.value)}
-          placeholder="0"
-          className="
-            w-20 bg-white text-ink border-2 border-ink
-            px-2 py-1 text-xs font-mono
-            focus:outline-none focus:shadow-pixel-sm
-          "
-        />
-      </label>
-      <label className="flex items-center gap-2">
-        <span className="text-[10px] uppercase tracking-wider text-ink/60">
-          Max
-        </span>
-        <input
-          type="number"
-          inputMode="decimal"
-          min="0"
-          step="1"
-          value={max}
-          onChange={(e) => onMaxChange(e.target.value)}
-          placeholder="∞"
-          className="
-            w-20 bg-white text-ink border-2 border-ink
-            px-2 py-1 text-xs font-mono
-            focus:outline-none focus:shadow-pixel-sm
-          "
-        />
-      </label>
-      {(min || max) && (
-        <button
-          type="button"
-          onClick={() => {
-            onMinChange('')
-            onMaxChange('')
-          }}
-          className="text-[10px] uppercase tracking-widest font-bold underline underline-offset-4 decoration-2 hover:text-arcane"
-        >
-          ✗ Limpar
-        </button>
-      )}
-    </div>
-  )
-}
+})
 
 // parsePrice: string da URL → number em reais ou null. Aceita
 // inteiro ou decimal (com . ou ,). Negativos e NaN viram null pra

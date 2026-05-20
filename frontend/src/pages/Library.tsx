@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, fileUrl, type Purchase } from '../api/client'
+import { formatDate, formatPrice } from '../lib/format'
 
 // /library: histórico de compras. Antes era stub "em breve"; agora
 // alimenta-se de GET /api/v1/my/library, que devolve Purchase[]
@@ -169,7 +170,10 @@ function Content({
 
 // LibraryLine: linha de uma compra. Trata o caso de asset deletado
 // (purchase.asset === null) renderizando placeholder.
-function LibraryLine({ purchase }: { purchase: Purchase }) {
+//
+// memo: `purchase` é estável por compra; retry/loading do pai não
+// cascateia.
+const LibraryLine = memo(function LibraryLine({ purchase }: { purchase: Purchase }) {
   const { asset } = purchase
 
   if (!asset) {
@@ -243,23 +247,5 @@ function LibraryLine({ purchase }: { purchase: Purchase }) {
       </div>
     </li>
   )
-}
-
-const priceFormatter = new Intl.NumberFormat('pt-BR', {
-  style: 'currency',
-  currency: 'BRL',
 })
 
-function formatPrice(cents: number): string {
-  return priceFormatter.format(cents / 100)
-}
-
-const dateFormatter = new Intl.DateTimeFormat('pt-BR', {
-  day: '2-digit',
-  month: '2-digit',
-  year: 'numeric',
-})
-
-function formatDate(iso: string): string {
-  return dateFormatter.format(new Date(iso))
-}

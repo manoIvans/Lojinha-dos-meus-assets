@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ApiError, api, fileUrl, type Asset } from '../api/client'
 import { useCart } from '../cart/CartContext'
+import { formatPrice } from '../lib/format'
 import Avatar from '../components/Avatar'
 import { useToast } from '../components/Toast'
 
@@ -228,7 +229,11 @@ function Content({
 
 // CartLine: linha de um item no carrinho. Click no thumb/título leva
 // pro detalhe; click no ✗ remove via CartContext.toggle.
-function CartLine({ asset }: { asset: Asset }) {
+//
+// memo: prop `asset` é referência estável (vem do array que mudou só
+// no fetch ou no toggle). Outros re-renders do pai (loading,
+// checkingOut, total) não precisam cascatear aqui.
+const CartLine = memo(function CartLine({ asset }: { asset: Asset }) {
   const { toggle } = useCart()
 
   async function handleRemove() {
@@ -285,7 +290,7 @@ function CartLine({ asset }: { asset: Asset }) {
       </div>
     </li>
   )
-}
+})
 
 // TotalCard: bloco fixo no fim da lista com o total e o botão
 // finalizar compra. Pixel-art destaque (bg-twilight) pra ele ser
@@ -323,15 +328,6 @@ function TotalCard({
       </button>
     </div>
   )
-}
-
-const priceFormatter = new Intl.NumberFormat('pt-BR', {
-  style: 'currency',
-  currency: 'BRL',
-})
-
-function formatPrice(cents: number): string {
-  return priceFormatter.format(cents / 100)
 }
 
 function messageForCheckout(err: unknown): string {

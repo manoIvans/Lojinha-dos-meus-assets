@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'r
 import { Link } from 'react-router-dom'
 import { ApiError, api, type User } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
+import { PIXEL_BTN, PIXEL_INPUT } from '../styles/pixel'
 import Avatar from '../components/Avatar'
 import { useToast } from '../components/Toast'
 
@@ -21,16 +22,6 @@ import { useToast } from '../components/Toast'
 // Source of truth do user é o currentUser do AuthContext. Após cada
 // mutation chamamos refreshUser() pra atualizar tudo (header + esta
 // página).
-
-const PIXEL_BTN =
-  'border-4 border-ink shadow-pixel px-4 py-2 text-xs font-bold uppercase tracking-widest ' +
-  'transition-all duration-75 ease-out ' +
-  'hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none ' +
-  'disabled:opacity-50 disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-pixel'
-
-const PIXEL_INPUT =
-  'mt-1 block w-full bg-white text-ink border-4 border-ink px-3 py-2 ' +
-  'font-mono focus:outline-none focus:shadow-pixel-sm'
 
 export default function ProfileMe() {
   const { currentUser, refreshUser } = useAuth()
@@ -179,7 +170,7 @@ export default function ProfileMe() {
             <button
               type="submit"
               disabled={!dirty || savingInfo}
-              className={`${PIXEL_BTN} bg-arcane text-parchment`}
+              className={`${PIXEL_BTN} text-xs bg-arcane text-parchment`}
             >
               {savingInfo ? '...' : '▶ Salvar'}
             </button>
@@ -187,7 +178,7 @@ export default function ProfileMe() {
               type="button"
               onClick={handleReset}
               disabled={!dirty || savingInfo}
-              className={`${PIXEL_BTN} bg-parchment text-ink`}
+              className={`${PIXEL_BTN} text-xs bg-parchment text-ink`}
             >
               ◀ Resetar
             </button>
@@ -274,7 +265,7 @@ function AvatarSection({
           type="button"
           onClick={() => fileInputRef.current?.click()}
           disabled={saving}
-          className={`${PIXEL_BTN} bg-arcane text-parchment`}
+          className={`${PIXEL_BTN} text-xs bg-arcane text-parchment`}
         >
           {saving ? '...' : hasAvatar ? '▶ Trocar' : '▶ Enviar foto'}
         </button>
@@ -283,7 +274,7 @@ function AvatarSection({
             type="button"
             onClick={handleRemove}
             disabled={saving}
-            className={`${PIXEL_BTN} bg-parchment text-ink`}
+            className={`${PIXEL_BTN} text-xs bg-parchment text-ink`}
           >
             ✗ Remover
           </button>

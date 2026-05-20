@@ -1,6 +1,7 @@
 import { memo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { fileUrl, type Asset } from '../api/client'
+import { formatPrice } from '../lib/format'
 import Avatar from './Avatar'
 import CartButton from './CartButton'
 import FavoriteButton from './FavoriteButton'
@@ -35,16 +36,17 @@ function AssetCardImpl({ asset, priority = false }: Props) {
   const [imgFailed, setImgFailed] = useState(false)
 
   return (
-    <article className="relative bg-parchment border-4 border-ink shadow-pixel">
-      {/* Link principal — área grande que leva pro detalhe do asset. */}
-      <Link
-        to={`/asset/${asset.id}`}
-        className="
-          block
-          transition-all duration-75 ease-out
-          hover:translate-x-[1px] hover:translate-y-[1px]
-        "
-      >
+    <article
+      className="
+        relative bg-parchment border-4 border-ink shadow-pixel
+        transition-all duration-75 ease-out
+        hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none
+      "
+    >
+      {/* Link principal — área grande que leva pro detalhe do asset.
+          Sem press próprio: o efeito está no <article> pai pra que
+          borda + sombra + conteúdo afundem juntos (sem desalinho). */}
+      <Link to={`/asset/${asset.id}`} className="block">
         <div className="relative aspect-square bg-parchment overflow-hidden">
           {imgFailed ? (
             <div className="w-full h-full flex items-center justify-center text-ink/50 text-xs uppercase tracking-widest">
@@ -93,29 +95,32 @@ function AssetCardImpl({ asset, priority = false }: Props) {
         </div>
       </Link>
 
-      {/* Faixa do autor: Link separado pra /u/:username. Borda 2px
-          superior visualmente separa do bloco principal. Hover mais
-          discreto (underline + cor arcane) pra que o usuário entenda
-          que é um destino distinto. */}
+      {/* Faixa do autor: Link separado pra /u/:username. O press do
+          card já acontece no hover via <article>; aqui adicionamos
+          hover EXTRA (bg-ink/10 + nome em arcane) pra deixar claro
+          que essa zona leva pra outro destino. */}
       {asset.author_username ? (
         <Link
           to={`/u/${asset.author_username}`}
           className="
-            border-t-2 border-ink/20 px-3 py-2 flex items-center gap-2
-            hover:bg-ink/5 group
+            block border-t-2 border-ink/20 px-3 py-2
+            transition-colors duration-75 ease-out
+            hover:bg-ink/10 group
           "
         >
-          <Avatar
-            avatarPath={asset.author_avatar_path}
-            name={asset.author_name ?? '?'}
-            size="xs"
-          />
-          <p className="text-xs truncate">
-            por{' '}
-            <span className="font-bold group-hover:text-arcane group-hover:underline underline-offset-4 decoration-2">
-              {asset.author_name ?? 'anônimo'}
-            </span>
-          </p>
+          <div className="flex items-center gap-2">
+            <Avatar
+              avatarPath={asset.author_avatar_path}
+              name={asset.author_name ?? '?'}
+              size="xs"
+            />
+            <p className="text-xs truncate">
+              por{' '}
+              <span className="font-bold group-hover:text-arcane group-hover:underline underline-offset-4 decoration-2">
+                {asset.author_name ?? 'anônimo'}
+              </span>
+            </p>
+          </div>
         </Link>
       ) : (
         // Fallback caso o asset não tenha author_username (resposta
@@ -149,15 +154,3 @@ function AssetCardImpl({ asset, priority = false }: Props) {
 
 const AssetCard = memo(AssetCardImpl)
 export default AssetCard
-
-// formatPrice em escopo de módulo — construtor caro relativo ao
-// .format(). Duplicado em AssetDetail.tsx; quando aparecer um 3º
-// consumer, extrair pra src/lib/format.ts.
-const priceFormatter = new Intl.NumberFormat('pt-BR', {
-  style: 'currency',
-  currency: 'BRL',
-})
-
-function formatPrice(cents: number): string {
-  return priceFormatter.format(cents / 100)
-}

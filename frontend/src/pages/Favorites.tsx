@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type Asset } from '../api/client'
+import { ASSET_GRID_CLASSES } from '../styles/pixel'
 import AssetCard from '../components/AssetCard'
 import AssetCardSkeleton from '../components/AssetCardSkeleton'
 import { useFavorites } from '../favorites/FavoritesContext'
@@ -11,8 +12,6 @@ import { useFavorites } from '../favorites/FavoritesContext'
 // (mais recente em cima).
 
 const SKELETON_COUNT = 4
-const GRID_CLASSES =
-  'grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6'
 
 export default function Favorites() {
   const [assets, setAssets] = useState<Asset[] | null>(null)
@@ -129,7 +128,7 @@ function Content({
 
   if (assets === null) {
     return (
-      <div className={GRID_CLASSES} aria-busy="true" aria-live="polite">
+      <div className={ASSET_GRID_CLASSES} aria-busy="true" aria-live="polite">
         {Array.from({ length: SKELETON_COUNT }).map((_, i) => (
           <AssetCardSkeleton key={i} />
         ))}
@@ -165,7 +164,7 @@ function Content({
   }
 
   return (
-    <div className={GRID_CLASSES}>
+    <div className={ASSET_GRID_CLASSES}>
       {assets.map((asset, i) => (
         <AssetCard key={asset.id} asset={asset} priority={i < 4} />
       ))}

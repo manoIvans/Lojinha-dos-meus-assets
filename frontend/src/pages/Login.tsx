@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
+import { PIXEL_BTN, PIXEL_INPUT } from '../styles/pixel'
 
 // Backend tem dois endpoints simétricos (ambos retornam {token}):
 //   POST /api/v1/login     → { token }
@@ -10,19 +11,6 @@ import { useAuth } from '../auth/AuthContext'
 // duplicaria o formulário.
 type Mode = 'login' | 'register'
 type AuthResponse = { token: string }
-
-// Classes reutilizadas em todos os botões "principais": borda grossa,
-// sombra pixel, hover-press. Extraídas em const para evitar drift
-// quando ajustarmos a estética (ex: trocar offset da sombra).
-const PIXEL_BTN =
-  'border-4 border-ink shadow-pixel px-4 py-2 font-bold uppercase tracking-widest ' +
-  'transition-all duration-75 ease-out ' +
-  'hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none ' +
-  'disabled:opacity-50 disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-pixel'
-
-const PIXEL_INPUT =
-  'mt-1 block w-full bg-white text-ink border-4 border-ink px-3 py-2 ' +
-  'font-mono focus:outline-none focus:shadow-pixel-sm'
 
 export default function Login() {
   const { login } = useAuth()

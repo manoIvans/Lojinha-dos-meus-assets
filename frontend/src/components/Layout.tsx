@@ -34,32 +34,30 @@ export default function Layout() {
 
   function handleLogout() {
     logout()
-    navigate('/')
+    // Vai pro /login (não /) pra que o usuário tenha entrada óbvia
+    // de re-autenticar. replace evita que o back do browser volte
+    // pra rota protegida onde estava antes (que agora daria 401).
+    navigate('/login', { replace: true })
   }
 
   return (
     <div className="min-h-screen flex flex-col bg-twilight-scan text-ink font-mono">
       <header>
-        <nav className="bg-arcane text-parchment px-6 py-4 border-b-4 border-ink flex items-center gap-4">
-          {/* Marca em duas linhas: nome principal com star decorativa +
-              tagline minúscula abaixo, no esquema "logo de jogo retrô". */}
+        <nav className="bg-arcane-magic text-parchment px-6 py-4 border-b-4 border-ink flex items-center gap-4">
+          {/* Marca em duas linhas: nome principal + tagline minúscula
+              abaixo, no esquema "logo de jogo retrô". */}
           <Link
             to="/"
-            className="flex items-center gap-3 mr-2 group leading-none"
+            className="flex flex-col gap-1.5 mr-2 group leading-none"
             aria-label="Página inicial"
           >
-            <span className="text-xl text-parchment group-hover:text-parchment/80">
-              ★
-            </span>
-            <span className="flex flex-col gap-1.5">
-              {/* font-pixel = Press Start 2P. Removidos font-bold (a fonte
-                  bitmap não tem variações de peso) e tracking custom (já
-                  vem espaçada). Mantive uppercase como segurança caso o
-                  texto futuro tenha minúsculas — a fonte só tem caixa alta. */}
-              <span className="font-pixel text-sm uppercase">Lojinha</span>
-              <span className="text-[9px] uppercase tracking-[0.4em] text-parchment/60">
-                Assets Raros
-              </span>
+            {/* font-pixel = Press Start 2P. Removidos font-bold (a fonte
+                bitmap não tem variações de peso) e tracking custom (já
+                vem espaçada). Mantive uppercase como segurança caso o
+                texto futuro tenha minúsculas — a fonte só tem caixa alta. */}
+            <span className="font-pixel text-sm uppercase">ManoMesh</span>
+            <span className="text-[9px] uppercase tracking-[0.4em] text-parchment/60">
+              Assets Raros
             </span>
           </Link>
 
@@ -85,10 +83,10 @@ export default function Layout() {
                 Minha Loja
               </NavLink>
               <NavLink to="/favoritos" className={navLinkClasses}>
-                ♥ Favoritos
+                Favoritos
               </NavLink>
               <NavLink to="/carrinho" className={navLinkClasses}>
-                ⌬ Carrinho
+                Carrinho
                 {/* Badge com count só aparece quando > 0 pra não poluir.
                     Renderizado dentro do NavLink pra ficar relativo
                     ao link sem precisar de wrapper extra. */}

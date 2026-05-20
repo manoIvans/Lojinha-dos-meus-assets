@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type PublicUser } from '../api/client'
 import Avatar from '../components/Avatar'
@@ -67,7 +67,7 @@ function Hero({
       </p>
       <div className="px-6 py-5">
         <h1 className="text-xl md:text-2xl font-bold uppercase tracking-wider leading-tight">
-          Aventureiros da Lojinha
+          Aventureiros da ManoMesh
         </h1>
         <p className="text-xs uppercase tracking-widest text-ink/60 mt-1">
           ▸ {subtitle(count, loading)}
@@ -153,7 +153,9 @@ function Content({
 // CreatorCard: bloco clicável com avatar, display_name, @username e
 // contagem de assets. Link inteiro pra /u/:username — diferente do
 // AssetCard, aqui não há sub-actions, então um Link único é suficiente.
-function CreatorCard({ user }: { user: PublicUser }) {
+//
+// memo: `user` é estável por linha; retry do pai não cascateia.
+const CreatorCard = memo(function CreatorCard({ user }: { user: PublicUser }) {
   const count = user.asset_count ?? 0
   return (
     <Link
@@ -187,7 +189,7 @@ function CreatorCard({ user }: { user: PublicUser }) {
       </div>
     </Link>
   )
-}
+})
 
 // CreatorCardSkeleton: silhueta com avatar + linhas — mantém layout
 // estável enquanto a lista carrega.

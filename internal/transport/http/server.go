@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -28,6 +29,18 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStor
 	// no topo da cadeia e responda preflight antes de RequireAuth.
 	r.Use(middleware.CORS(allowedOrigins))
 
+	// Gzip nas respostas JSON. /uploads é excluído porque PNG/JPG/WEBP/
+	// GLB já vêm comprimidos pelo formato; recomprimir queima CPU sem
+	// ganho. JSON do catálogo, ao contrário, comprime ~80% — vira
+	// transferência muito menor pra galeria/biblioteca/etc.
+	//
+	// DefaultCompression equilibra CPU vs ratio. Acima disso (Best...)
+	// o ganho marginal não vale o custo por request.
+	r.Use(gzip.Gzip(
+		gzip.DefaultCompression,
+		gzip.WithExcludedPaths([]string{"/uploads"}),
+	))
+
 	// MaxMultipartMemory controla quanto do upload fica em RAM antes
 	// de transbordar para tempfile. 32 MiB é confortável para os
 	// limites desta API (5 MiB thumb + 100 MiB modelo).
@@ -37,7 +50,22 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStor
 	// `${API_BASE}/uploads/${asset.thumbnail_path}` direto na tag <img>
 	// ou no loader do three.js. noDirFS bloqueia listagem de pasta —
 	// só URLs com filename completo (UUID) funcionam.
-	r.StaticFS("/uploads", noDirFS{fs: http.Dir(files.RootDir())})
+	//
+	// Cache-Control agressivo: como cada arquivo tem nome UUID e nunca
+	// muda de conteúdo (qualquer "troca de thumbnail" gera UUID novo
+	// + apaga o antigo), são efetivamente IMUTÁVEIS. 1 ano + immutable
+	// permite que o browser sirva do disk-cache sem nem fazer 304.
+	// Browsers respeitam `immutable` ignorando reload-shift-clicks.
+	uploadsHandler := withImmutableCache(
+		http.FileServer(noDirFS{fs: http.Dir(files.RootDir())}),
+	)
+	r.GET("/uploads/*filepath", func(c *gin.Context) {
+		// StripPrefix porque o FileServer espera o path sem o /uploads.
+		http.StripPrefix("/uploads", uploadsHandler).ServeHTTP(c.Writer, c.Request)
+	})
+	r.HEAD("/uploads/*filepath", func(c *gin.Context) {
+		http.StripPrefix("/uploads", uploadsHandler).ServeHTTP(c.Writer, c.Request)
+	})
 
 	healthHandler := handler.NewHealthHandler(db)
 	r.GET("/ping", healthHandler.Ping)

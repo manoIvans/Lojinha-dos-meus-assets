@@ -2,6 +2,9 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { ApiError, api, fileUrl, type Asset } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
+import { fromCents, toCents } from '../lib/money'
+import { parseTags } from '../lib/tags'
+import { PIXEL_BTN, PIXEL_INPUT } from '../styles/pixel'
 import { useToast } from '../components/Toast'
 
 // AssetEdit (/asset/:id/edit): formulário de edição completo do dono.
@@ -24,16 +27,6 @@ import { useToast } from '../components/Toast'
 //
 // Ownership client-side é APENAS UX/redirecionamento — o backend
 // rejeita PUT/DELETE de quem não é dono (ErrAssetForbidden → 403).
-
-const PIXEL_INPUT =
-  'mt-1 block w-full bg-white text-ink border-4 border-ink px-3 py-2 ' +
-  'font-mono focus:outline-none focus:shadow-pixel-sm'
-
-const PIXEL_BTN =
-  'border-4 border-ink shadow-pixel px-4 py-2 font-bold uppercase tracking-widest ' +
-  'transition-all duration-75 ease-out ' +
-  'hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none ' +
-  'disabled:opacity-50 disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-pixel'
 
 export default function AssetEdit() {
   const { id } = useParams<{ id: string }>()
@@ -453,38 +446,6 @@ function ErrorState({ message }: { message: string }) {
       </div>
     </div>
   )
-}
-
-// parseTags: mesma lógica do Dashboard. Quando virar 3º caller,
-// extrair pra src/lib/tags.ts.
-function parseTags(raw: string): string[] {
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const piece of raw.split(/[,\n]/)) {
-    const t = piece.trim()
-    if (!t || seen.has(t)) continue
-    seen.add(t)
-    out.push(t)
-  }
-  return out
-}
-
-// toCents aceita "12", "12.90", "12,90". null pra qualquer coisa
-// fora disso. Mesma lógica do Dashboard — quando virar 3º consumer,
-// extrair pra src/lib/money.ts.
-function toCents(raw: string): number | null {
-  const normalized = raw.replace(',', '.').trim()
-  if (!normalized) return null
-  const value = Number(normalized)
-  if (!Number.isFinite(value) || value < 0) return null
-  return Math.round(value * 100)
-}
-
-// fromCents é o inverso usado só na inicialização do form. Devolve
-// formato "29,90" (vírgula como separador decimal) pra combinar com
-// o que o usuário digitou originalmente.
-function fromCents(cents: number): string {
-  return (cents / 100).toFixed(2).replace('.', ',')
 }
 
 function messageFor(err: unknown): string {

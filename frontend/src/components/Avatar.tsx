@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { fileUrl } from '../api/client'
 
 // Avatar: thumbnail circular do usuário, com fallback de inicial.
@@ -39,7 +39,11 @@ const SIZES: Record<Size, { box: string; text: string }> = {
   lg: { box: 'w-24 h-24', text: 'text-4xl' },
 }
 
-export default function Avatar({
+// memo: Avatar aparece em listas (Gallery, Creators, /carrinho,
+// /library, etc) — N por página. Props são primitivas estáveis por
+// item (avatarPath, name, size, interactive); re-render do pai não
+// precisa cascatear aqui.
+function AvatarImpl({
   avatarPath,
   name,
   size = 'sm',
@@ -82,3 +86,6 @@ export default function Avatar({
     </div>
   )
 }
+
+const Avatar = memo(AvatarImpl)
+export default Avatar

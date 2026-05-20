@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ApiError, api, fileUrl, type Asset } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
+import { formatDate, formatPrice } from '../lib/format'
 import AssetCard from '../components/AssetCard'
 import AssetCardSkeleton from '../components/AssetCardSkeleton'
 import Avatar from '../components/Avatar'
@@ -150,6 +151,12 @@ function Detail({ asset }: { asset: Asset }) {
         </div>
       </header>
 
+      {/* OwnerPanel acima do visualizador: o dono geralmente vem aqui
+          pra editar/excluir, não pra rever o modelo — colocar antes
+          do viewer evita scroll desnecessário. Backend continua
+          validando ownership em PUT/DELETE (403 se não bater). */}
+      {isOwner && <OwnerPanel asset={asset} onConfirmDelete={handleDelete} />}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <section className="lg:col-span-2">
           <div className="bg-parchment border-4 border-ink shadow-pixel">
@@ -232,11 +239,6 @@ function Detail({ asset }: { asset: Asset }) {
           </div>
         </aside>
       </div>
-
-      {/* OwnerPanel só aparece quando o usuário logado é o dono. UI
-          gate aqui; backend valida ownership em PUT/DELETE de qualquer
-          jeito (ErrAssetForbidden → 403). */}
-      {isOwner && <OwnerPanel asset={asset} onConfirmDelete={handleDelete} />}
 
       {/* Sessão de recomendações no fim da página: depois do usuário
           ter visto o asset, mostra outros com tags em comum.
@@ -487,21 +489,3 @@ function messageForDelete(err: unknown): string {
   return 'Falha ao excluir o asset'
 }
 
-const priceFormatter = new Intl.NumberFormat('pt-BR', {
-  style: 'currency',
-  currency: 'BRL',
-})
-
-function formatPrice(cents: number): string {
-  return priceFormatter.format(cents / 100)
-}
-
-const dateFormatter = new Intl.DateTimeFormat('pt-BR', {
-  day: '2-digit',
-  month: '2-digit',
-  year: 'numeric',
-})
-
-function formatDate(iso: string): string {
-  return dateFormatter.format(new Date(iso))
-}

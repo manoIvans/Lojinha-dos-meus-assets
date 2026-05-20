@@ -37,18 +37,94 @@
 }
 
 /*
- * Textura "scanlines" do palco crepuscular: linhas horizontais a 4px
- * de período com 4% de branco — quase imperceptíveis individualmente,
- * mas dão profundidade CRT ao bg-twilight. Aplicada via classe própria
- * (não @theme) porque é um padrão visual, não um token de cor.
+ * Fundo "céu crepuscular": camadas empilhadas pra dar profundidade
+ * ao palco sem perder a vibe pixel-art. De cima pra baixo (z-order
+ * inverso da declaração, porque o primeiro background-image fica
+ * na frente):
+ *
+ *   1. Estrelas — pixels brancos espalhados num tile 200x200 (SVG
+ *      inline). `background-attachment: fixed` faz o céu não rolar
+ *      com o conteúdo: sensação de "olhar pra cima" enquanto navega.
+ *   2. Scanlines — linhas horizontais 4px com 5% de branco, efeito
+ *      CRT clássico (intensidade ligeiramente maior que antes pra
+ *      registrar melhor agora que tem mais coisa no bg).
+ *   3. Vignette radial — escurecimento sutil nas bordas (rgba ink)
+ *      pra focar visualmente o centro onde fica o conteúdo.
+ *   4. Gradient vertical — twilight no topo derivando pra darker
+ *      embaixo, simula horizonte de noite estrelada.
+ *   5. Cor base — twilight (fallback pro caso de algum background
+ *      não carregar).
+ *
+ * Sem GIF/animação propositalmente: rodando 24/7 estraga o fundo
+ * "estável" que o pixel-art pede e pesa em mobile.
  */
 .bg-twilight-scan {
   background-color: var(--color-twilight);
-  background-image: repeating-linear-gradient(
-    0deg,
-    transparent 0,
-    transparent 3px,
-    rgba(255, 255, 255, 0.04) 3px,
-    rgba(255, 255, 255, 0.04) 4px
-  );
+  background-image:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><rect fill='white' opacity='.35' x='17' y='23' width='1' height='1'/><rect fill='white' opacity='.45' x='87' y='13' width='1' height='1'/><rect fill='white' opacity='.55' x='143' y='51' width='1' height='1'/><rect fill='white' opacity='.3' x='38' y='67' width='1' height='1'/><rect fill='white' opacity='.5' x='171' y='89' width='1' height='1'/><rect fill='white' opacity='.4' x='62' y='119' width='1' height='1'/><rect fill='white' opacity='.35' x='29' y='154' width='1' height='1'/><rect fill='white' opacity='.45' x='108' y='176' width='1' height='1'/><rect fill='white' opacity='.5' x='181' y='138' width='1' height='1'/><rect fill='white' opacity='.4' x='7' y='98' width='1' height='1'/><rect fill='white' opacity='.35' x='133' y='8' width='1' height='1'/><rect fill='white' opacity='.5' x='53' y='37' width='1' height='1'/><rect fill='white' opacity='.7' x='95' y='41' width='2' height='2'/><rect fill='white' opacity='.6' x='155' y='113' width='2' height='2'/><rect fill='white' opacity='.85' x='51' y='92' width='2' height='2'/><rect fill='white' opacity='.7' x='122' y='162' width='2' height='2'/><rect fill='white' opacity='.6' x='74' y='187' width='2' height='2'/><rect fill='white' opacity='.75' x='189' y='32' width='2' height='2'/><rect fill='white' opacity='.65' x='20' y='178' width='2' height='2'/></svg>"),
+    repeating-linear-gradient(
+      0deg,
+      transparent 0,
+      transparent 3px,
+      rgba(255, 255, 255, 0.05) 3px,
+      rgba(255, 255, 255, 0.05) 4px
+    ),
+    radial-gradient(
+      ellipse at center,
+      transparent 30%,
+      rgba(26, 28, 44, 0.45) 100%
+    ),
+    linear-gradient(
+      180deg,
+      var(--color-twilight) 0%,
+      #1d5a64 60%,
+      #14424a 100%
+    );
+  background-repeat: repeat, repeat, no-repeat, no-repeat;
+  background-attachment: fixed, scroll, fixed, fixed;
+  background-size: 200px 200px, auto, 100% 100%, 100% 100%;
+}
+
+/*
+ * Fundo "estandarte arcano" do header. Visual de banner real RPG:
+ * listras diagonais sutis tipo tecido + bordas com relevo + gradient
+ * vertical marcado. Sem partículas aleatórias — só formas geométricas
+ * intencionais.
+ *
+ * Camadas (de cima pra baixo na renderização):
+ *
+ *   1. Diagonal stripes — repeating-linear-gradient a 45° com 8px de
+ *      período (1px claro + 7px transparente). Look de "fio tecido"
+ *      em pano de banner, sem virar zebrado óbvio.
+ *   2. Highlight no topo (2px branco translúcido) + sombra interna
+ *      no rodapé (3px ink). Dá feel de placa de metal pixel-art com
+ *      borda iluminada em cima e gravada embaixo.
+ *   3. Gradient vertical principal — arcane derivando pra um arcane
+ *      bem mais escuro embaixo. Profundidade clara sem mudar paleta.
+ *   4. Cor base — arcane (fallback).
+ */
+.bg-arcane-magic {
+  background-color: var(--color-arcane);
+  background-image:
+    repeating-linear-gradient(
+      45deg,
+      transparent 0,
+      transparent 7px,
+      rgba(255, 255, 255, 0.05) 7px,
+      rgba(255, 255, 255, 0.05) 8px
+    ),
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.12) 0%,
+      transparent 2px,
+      transparent calc(100% - 3px),
+      rgba(0, 0, 0, 0.35) 100%
+    ),
+    linear-gradient(
+      180deg,
+      var(--color-arcane) 0%,
+      #3d1740 100%
+    );
+  background-repeat: repeat, no-repeat, no-repeat;
+  background-size: auto, 100% 100%, 100% 100%;
 }

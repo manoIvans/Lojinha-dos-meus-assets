@@ -1,6 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError, api, type Asset } from '../api/client'
+import { toCents } from '../lib/money'
+import { parseTags } from '../lib/tags'
+import { PIXEL_BTN, PIXEL_INPUT } from '../styles/pixel'
 import { useToast } from '../components/Toast'
 
 // Dashboard: formulário de upload protegido (/dashboard, atrás do
@@ -10,18 +13,9 @@ import { useToast } from '../components/Toast'
 
 const SUCCESS_DISMISS_MS = 5000
 
-// Classes pixel-art reutilizadas — extraídas em const para uniformizar
-// o look e evitar drift quando ajustarmos a estética.
-const PIXEL_INPUT =
-  'mt-1 block w-full bg-white text-ink border-4 border-ink px-3 py-2 ' +
-  'font-mono focus:outline-none focus:shadow-pixel-sm'
-
-const PIXEL_BTN =
-  'border-4 border-ink shadow-pixel px-4 py-2 font-bold uppercase tracking-widest ' +
-  'transition-all duration-75 ease-out ' +
-  'hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none ' +
-  'disabled:opacity-50 disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-pixel'
-
+// FILE_INPUT é local porque só o Dashboard tem upload combinado de
+// thumbnail + modelo. Quando AssetEdit também usar input estilizado,
+// vale extrair pra src/styles/pixel.ts.
 const FILE_INPUT =
   'mt-1 block w-full text-xs font-mono ' +
   'file:mr-3 file:border-4 file:border-ink file:bg-arcane file:text-parchment ' +
@@ -309,36 +303,6 @@ function Callouts({
 }
 
 // --- Helpers -----------------------------------------------------------------
-
-// parseTags pega a string crua do input ("3D, low-poly, fantasia"),
-// quebra por vírgula OU newline, e devolve a lista normalizada:
-//   - trim de whitespace de cada tag
-//   - descarta vazias
-//   - dedup (case-sensitive — "3D" e "3d" podem coexistir)
-// Idempotente. A validação dura (1-10 tags, 1-30 chars cada) acontece
-// no backend — aqui só fazemos o saneamento de entrada.
-function parseTags(raw: string): string[] {
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const piece of raw.split(/[,\n]/)) {
-    const t = piece.trim()
-    if (!t || seen.has(t)) continue
-    seen.add(t)
-    out.push(t)
-  }
-  return out
-}
-
-// toCents aceita "12", "12.90", "12,90". null para qualquer coisa fora
-// disso. Substituível por lib de money quando precisar validar moeda
-// de verdade.
-function toCents(raw: string): number | null {
-  const normalized = raw.replace(',', '.').trim()
-  if (!normalized) return null
-  const value = Number(normalized)
-  if (!Number.isFinite(value) || value < 0) return null
-  return Math.round(value * 100)
-}
 
 function messageFor(err: unknown): string {
   if (err instanceof ApiError) {

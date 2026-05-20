@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ApiError, api, type Asset, type PublicUser } from '../api/client'
+import { ASSET_GRID_CLASSES } from '../styles/pixel'
 import AssetCard from '../components/AssetCard'
 import AssetCardSkeleton from '../components/AssetCardSkeleton'
 import Avatar from '../components/Avatar'
@@ -19,8 +20,6 @@ import Avatar from '../components/Avatar'
 // MyStore: hero + grid de cards.
 
 const SKELETON_COUNT = 4
-const GRID_CLASSES =
-  'grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6'
 
 export default function UserProfile() {
   const { username } = useParams<{ username: string }>()
@@ -130,7 +129,7 @@ function Hero({
 function Content({ assets }: { assets: Asset[] | null }) {
   if (assets === null) {
     return (
-      <div className={GRID_CLASSES} aria-busy="true" aria-live="polite">
+      <div className={ASSET_GRID_CLASSES} aria-busy="true" aria-live="polite">
         {Array.from({ length: SKELETON_COUNT }).map((_, i) => (
           <AssetCardSkeleton key={i} />
         ))}
@@ -152,7 +151,7 @@ function Content({ assets }: { assets: Asset[] | null }) {
   }
 
   return (
-    <div className={GRID_CLASSES}>
+    <div className={ASSET_GRID_CLASSES}>
       {assets.map((asset, i) => (
         <AssetCard key={asset.id} asset={asset} priority={i < 4} />
       ))}
