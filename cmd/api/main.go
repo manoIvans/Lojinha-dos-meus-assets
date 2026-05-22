@@ -11,6 +11,7 @@ import (
 
 	"github.com/manoIvans/lojinha-assets/internal/auth"
 	"github.com/manoIvans/lojinha-assets/internal/config"
+	"github.com/manoIvans/lojinha-assets/internal/migrate"
 	"github.com/manoIvans/lojinha-assets/internal/repository/postgres"
 	"github.com/manoIvans/lojinha-assets/internal/storage"
 	httptransport "github.com/manoIvans/lojinha-assets/internal/transport/http"
@@ -37,6 +38,15 @@ func main() {
 	}
 	defer db.Close()
 	log.Println("postgres conectado")
+
+	// 3.5) Migrations. Roda ANTES de qualquer handler tocar no banco,
+	// pra que o schema esteja sempre atualizado. Idempotente: se tudo
+	// já está aplicado, é só uma query de leitura na schema_migrations.
+	// Falha hard se algo der errado — melhor crashar no boot que servir
+	// requests com schema parcialmente migrado.
+	if err := migrate.Run(ctx, db, cfg.MigrationsDir); err != nil {
+		log.Fatalf("migrate: %v", err)
+	}
 
 	// 4) Gerenciador de tokens JWT. Criado uma vez no boot e
 	// reaproveitado em todas as requests — o segredo nunca sai

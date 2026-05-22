@@ -17,6 +17,15 @@ import (
 // queries (FindByID/List/ListByOwner) que fazem o JOIN.
 const assetAuthorColumns = "u.display_name, u.username, u.avatar_path"
 
+// assetReviewAggCols: subqueries que computam média + count de
+// reviews por asset. Inline no SELECT — alternativa LEFT JOIN +
+// GROUP BY complicaria os demais JOINs. AVG vira NULL quando não
+// há reviews; COUNT vira 0. AVG mapeia pra *float64 no Go (pointer
+// pra distinguir null de zero).
+const assetReviewAggCols = `
+	(SELECT AVG(rating)::float8 FROM reviews WHERE asset_id = a.id) AS avg_rating,
+	(SELECT COUNT(*) FROM reviews WHERE asset_id = a.id) AS review_count`
+
 // AssetRepository encapsula o acesso à tabela `assets`. Mesma forma
 // que UserRepository: o handler depende de uma interface pequena
 // definida no pacote handler — esta struct é só implementação.
@@ -78,7 +87,8 @@ func (r *AssetRepository) FindByID(ctx context.Context, id int64) (*domain.Asset
 	const q = `
 		SELECT a.id, a.owner_id, a.title, a.description, a.tags,
 		       a.price_cents, a.thumbnail_path, a.model_path,
-		       a.created_at, a.updated_at, ` + assetAuthorColumns + `
+		       a.created_at, a.updated_at, ` + assetAuthorColumns + `,
+		       ` + assetReviewAggCols + `
 		  FROM assets a
 		  JOIN users u ON u.id = a.owner_id
 		 WHERE a.id = $1`
@@ -89,6 +99,7 @@ func (r *AssetRepository) FindByID(ctx context.Context, id int64) (*domain.Asset
 		&a.PriceCents, &a.ThumbnailPath, &a.ModelPath,
 		&a.CreatedAt, &a.UpdatedAt,
 		&a.AuthorName, &a.AuthorUsername, &a.AuthorAvatarPath,
+		&a.AverageRating, &a.ReviewCount,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -107,7 +118,8 @@ func (r *AssetRepository) List(ctx context.Context) ([]*domain.Asset, error) {
 	const q = `
 		SELECT a.id, a.owner_id, a.title, a.description, a.tags,
 		       a.price_cents, a.thumbnail_path, a.model_path,
-		       a.created_at, a.updated_at, ` + assetAuthorColumns + `
+		       a.created_at, a.updated_at, ` + assetAuthorColumns + `,
+		       ` + assetReviewAggCols + `
 		  FROM assets a
 		  JOIN users u ON u.id = a.owner_id
 		 ORDER BY a.created_at DESC`
@@ -129,6 +141,7 @@ func (r *AssetRepository) List(ctx context.Context) ([]*domain.Asset, error) {
 			&a.PriceCents, &a.ThumbnailPath, &a.ModelPath,
 			&a.CreatedAt, &a.UpdatedAt,
 			&a.AuthorName, &a.AuthorUsername, &a.AuthorAvatarPath,
+			&a.AverageRating, &a.ReviewCount,
 		); err != nil {
 			return nil, fmt.Errorf("scan asset row: %w", err)
 		}
@@ -147,7 +160,8 @@ func (r *AssetRepository) ListByOwner(ctx context.Context, ownerID int64) ([]*do
 	const q = `
 		SELECT a.id, a.owner_id, a.title, a.description, a.tags,
 		       a.price_cents, a.thumbnail_path, a.model_path,
-		       a.created_at, a.updated_at, ` + assetAuthorColumns + `
+		       a.created_at, a.updated_at, ` + assetAuthorColumns + `,
+		       ` + assetReviewAggCols + `
 		  FROM assets a
 		  JOIN users u ON u.id = a.owner_id
 		 WHERE a.owner_id = $1
@@ -167,6 +181,7 @@ func (r *AssetRepository) ListByOwner(ctx context.Context, ownerID int64) ([]*do
 			&a.PriceCents, &a.ThumbnailPath, &a.ModelPath,
 			&a.CreatedAt, &a.UpdatedAt,
 			&a.AuthorName, &a.AuthorUsername, &a.AuthorAvatarPath,
+			&a.AverageRating, &a.ReviewCount,
 		); err != nil {
 			return nil, fmt.Errorf("scan asset row: %w", err)
 		}
@@ -217,7 +232,8 @@ func (r *AssetRepository) ListSimilar(ctx context.Context, assetID int64, limit 
 		)
 		SELECT a.id, a.owner_id, a.title, a.description, a.tags,
 		       a.price_cents, a.thumbnail_path, a.model_path,
-		       a.created_at, a.updated_at, ` + assetAuthorColumns + `
+		       a.created_at, a.updated_at, ` + assetAuthorColumns + `,
+		       ` + assetReviewAggCols + `
 		  FROM assets a
 		  CROSS JOIN target
 		  JOIN users u ON u.id = a.owner_id
@@ -273,7 +289,8 @@ func (r *AssetRepository) ListTrending(ctx context.Context, limit int) ([]*domai
 	const q = `
 		SELECT a.id, a.owner_id, a.title, a.description, a.tags,
 		       a.price_cents, a.thumbnail_path, a.model_path,
-		       a.created_at, a.updated_at, ` + assetAuthorColumns + `
+		       a.created_at, a.updated_at, ` + assetAuthorColumns + `,
+		       ` + assetReviewAggCols + `
 		  FROM assets a
 		  JOIN users u ON u.id = a.owner_id
 		  JOIN purchases p ON p.asset_id = a.id

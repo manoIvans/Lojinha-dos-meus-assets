@@ -5,6 +5,7 @@ import { formatPrice } from '../lib/format'
 import Avatar from './Avatar'
 import CartButton from './CartButton'
 import FavoriteButton from './FavoriteButton'
+import StarRating from './StarRating'
 
 // Card de asset na vitrine. Estrutura com DOIS Links:
 //
@@ -116,6 +117,19 @@ function AssetCardImpl({ asset, priority = false }: Props) {
           >
             {asset.title}
           </h2>
+          {/* Rating compacto: estrelas + count. Aparece quando ALGUM
+              review existe (count > 0). Sem reviews → linha some,
+              não ocupa espaço vazio. */}
+          {(asset.review_count ?? 0) > 0 && (
+            <div className="flex items-center gap-1 text-[10px] text-ink/70">
+              <StarRating
+                value={asset.average_rating ?? 0}
+                size="sm"
+                ariaLabel={`${(asset.average_rating ?? 0).toFixed(1)} estrelas (${asset.review_count})`}
+              />
+              <span>({asset.review_count})</span>
+            </div>
+          )}
           <p className="text-sm font-bold pt-1">
             ✦ {formatPrice(asset.price_cents)}
           </p>

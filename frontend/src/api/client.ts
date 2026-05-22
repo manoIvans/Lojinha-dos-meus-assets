@@ -74,6 +74,77 @@ export type PublicUser = {
   created_at: string
 }
 
+// Notification: shape devolvido por /api/v1/my/notifications.
+// Campos *_user / asset_* vêm via LEFT JOIN — null quando o asset
+// ou actor foi deletado depois.
+export type Notification = {
+  id: number
+  user_id: number
+  type: 'asset_sold' | 'asset_reviewed'
+  asset_id?: number | null
+  actor_user_id?: number | null
+  read_at?: string | null
+  created_at: string
+  // Joined
+  asset_title?: string | null
+  actor_username?: string | null
+  actor_display_name?: string | null
+  actor_avatar_path?: string | null
+}
+
+// SellerStats: shape devolvido por GET /api/v1/my/store/stats.
+// Alimenta o dashboard analítico no /my-store.
+//
+// top_asset é omitido quando vendedor ainda não vendeu nada (todos
+// os agregados são 0 e top_asset = null/undefined).
+export type SellerStats = {
+  total_sales: number
+  revenue_cents: number
+  unique_buyers: number
+  top_asset?: {
+    asset_id: number
+    title: string
+    sales: number
+  } | null
+  recent_sales: SaleSummary[]
+}
+
+// SaleSummary: linha "achatada" de venda recente — JOIN purchase ↔
+// asset ↔ buyer em uma row só, mais leve que aninhar Purchase + Asset.
+export type SaleSummary = {
+  purchase_id: number
+  asset_id: number
+  asset_title: string
+  buyer_username: string
+  buyer_display_name: string
+  price_cents_snapshot: number
+  purchased_at: string
+}
+
+// Review: avaliação de um asset por um comprador. rating 1-5,
+// comment opcional. Quando devolvido em listagens, os campos
+// author_* vêm populados via JOIN; nas respostas de POST/PUT
+// (rota de escrita) podem vir undefined.
+export type Review = {
+  id: number
+  asset_id: number
+  user_id: number
+  rating: number
+  comment: string
+  created_at: string
+  updated_at: string
+  author_username?: string
+  author_display_name?: string
+  author_avatar_path?: string | null
+}
+
+// ReviewSummary: agregado mostrado próximo ao título (estrelas +
+// total). average = 0 quando count = 0 (frontend esconde).
+export type ReviewSummary = {
+  average: number
+  count: number
+}
+
 // Purchase é o registro IMUTÁVEL de uma compra. price_cents_snapshot
 // preserva o preço pago — não muda mesmo que o vendedor reajuste o
 // preço do asset depois. `asset` é nullable: se o vendedor deletou,
@@ -103,6 +174,11 @@ export type Asset = {
   author_name?: string
   author_username?: string
   author_avatar_path?: string | null
+  // Agregado de reviews via subquery no backend. average_rating é
+  // null quando o asset não tem nenhum review (SQL AVG → NULL), e
+  // review_count é 0. Frontend trata `count > 0` como "tem reviews".
+  average_rating?: number | null
+  review_count?: number
   created_at: string
   updated_at: string
 }

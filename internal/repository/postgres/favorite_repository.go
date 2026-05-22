@@ -84,7 +84,9 @@ func (r *FavoriteRepository) ListByUser(ctx context.Context, userID int64) ([]*d
 		SELECT a.id, a.owner_id, a.title, a.description, a.tags,
 		       a.price_cents, a.thumbnail_path, a.model_path,
 		       a.created_at, a.updated_at,
-		       u.display_name, u.username, u.avatar_path
+		       u.display_name, u.username, u.avatar_path,
+		       (SELECT AVG(rating)::float8 FROM reviews WHERE asset_id = a.id) AS avg_rating,
+		       (SELECT COUNT(*) FROM reviews WHERE asset_id = a.id) AS review_count
 		  FROM favorites f
 		  JOIN assets a ON a.id = f.asset_id
 		  JOIN users u ON u.id = a.owner_id
@@ -105,6 +107,7 @@ func (r *FavoriteRepository) ListByUser(ctx context.Context, userID int64) ([]*d
 			&a.PriceCents, &a.ThumbnailPath, &a.ModelPath,
 			&a.CreatedAt, &a.UpdatedAt,
 			&a.AuthorName, &a.AuthorUsername, &a.AuthorAvatarPath,
+			&a.AverageRating, &a.ReviewCount,
 		); err != nil {
 			return nil, fmt.Errorf("scan favorite row: %w", err)
 		}

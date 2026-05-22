@@ -80,9 +80,15 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStor
 	favoriteRepo := postgres.NewFavoriteRepository(db)
 	favoriteHandler := handler.NewFavoriteHandler(favoriteRepo)
 
+	notificationRepo := postgres.NewNotificationRepository(db)
+	notificationHandler := handler.NewNotificationHandler(notificationRepo)
+
 	cartRepo := postgres.NewCartRepository(db)
 	purchaseRepo := postgres.NewPurchaseRepository(db)
-	cartHandler := handler.NewCartHandler(cartRepo, purchaseRepo)
+	cartHandler := handler.NewCartHandler(cartRepo, purchaseRepo, notificationRepo)
+
+	reviewRepo := postgres.NewReviewRepository(db)
+	reviewHandler := handler.NewReviewHandler(reviewRepo, purchaseRepo, notificationRepo)
 
 	api := r.Group("/api/v1")
 	{
@@ -104,6 +110,12 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStor
 		// /tags devolve [{tag, count}] do catálogo inteiro. Público
 		// porque o catálogo é público — não vaza nada novo.
 		api.GET("/tags", assetHandler.Tags)
+
+		// Reviews públicos: qualquer um vê a lista e o resumo (média
+		// + count). Criar/editar/deletar fica no grupo protegido
+		// abaixo, com checagem de compra.
+		api.GET("/assets/:id/reviews", reviewHandler.List)
+		api.GET("/assets/:id/reviews/summary", reviewHandler.Summary)
 
 		// Diretório de criadores. Pública porque o catálogo já
 		// expõe autores. Aceita ?limit= pra alimentar a sessão
@@ -156,6 +168,25 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStor
 			protected.POST("/my/cart/checkout", cartHandler.Checkout)
 			protected.GET("/my/library", cartHandler.Library)
 			protected.GET("/my/library-ids", cartHandler.LibraryIDs)
+
+			// Dashboard analítico do vendedor: totais + top asset +
+			// últimas vendas. Agrega `purchases` JOIN `assets` filtrando
+			// pelo dono — cada usuário só vê suas próprias métricas.
+			protected.GET("/my/store/stats", cartHandler.StoreStats)
+
+			// Reviews — escrita protegida. POST exige que o usuário
+			// tenha comprado o asset (validado no handler). PUT/DELETE
+			// só pelo autor. Listar/summary continua público acima.
+			protected.POST("/assets/:id/reviews", reviewHandler.Create)
+			protected.PUT("/reviews/:id", reviewHandler.Update)
+			protected.DELETE("/reviews/:id", reviewHandler.Delete)
+
+			// Notificações in-app do usuário. Geradas em hooks
+			// (CartHandler.Checkout, ReviewHandler.Create); aqui só
+			// listamos/marcamos como lidas.
+			protected.GET("/my/notifications", notificationHandler.List)
+			protected.GET("/my/notifications/unread-count", notificationHandler.UnreadCount)
+			protected.POST("/my/notifications/read-all", notificationHandler.MarkAllRead)
 
 			// Perfil próprio: GET retorna a versão completa (com email),
 			// PATCH edita display_name/bio, POST/DELETE /avatar trocam

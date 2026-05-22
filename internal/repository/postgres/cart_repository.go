@@ -88,7 +88,9 @@ func (r *CartRepository) ListByUser(ctx context.Context, userID int64) ([]*domai
 		SELECT a.id, a.owner_id, a.title, a.description, a.tags,
 		       a.price_cents, a.thumbnail_path, a.model_path,
 		       a.created_at, a.updated_at,
-		       u.display_name, u.username, u.avatar_path
+		       u.display_name, u.username, u.avatar_path,
+		       (SELECT AVG(rating)::float8 FROM reviews WHERE asset_id = a.id) AS avg_rating,
+		       (SELECT COUNT(*) FROM reviews WHERE asset_id = a.id) AS review_count
 		  FROM cart_items c
 		  JOIN assets a ON a.id = c.asset_id
 		  JOIN users u ON u.id = a.owner_id
@@ -109,6 +111,7 @@ func (r *CartRepository) ListByUser(ctx context.Context, userID int64) ([]*domai
 			&a.PriceCents, &a.ThumbnailPath, &a.ModelPath,
 			&a.CreatedAt, &a.UpdatedAt,
 			&a.AuthorName, &a.AuthorUsername, &a.AuthorAvatarPath,
+			&a.AverageRating, &a.ReviewCount,
 		); err != nil {
 			return nil, fmt.Errorf("scan cart row: %w", err)
 		}

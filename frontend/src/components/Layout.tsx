@@ -1,6 +1,7 @@
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { useCart } from '../cart/CartContext'
+import { useNotifications } from '../notifications/NotificationsContext'
 import Avatar from './Avatar'
 
 // Shell de todas as páginas. A combinação bg-parchment + text-ink +
@@ -30,6 +31,7 @@ function navLinkClasses({ isActive }: { isActive: boolean }) {
 export default function Layout() {
   const { isAuthenticated, currentUser, logout } = useAuth()
   const { count: cartCount } = useCart()
+  const { unreadCount } = useNotifications()
   const navigate = useNavigate()
 
   function handleLogout() {
@@ -104,6 +106,25 @@ export default function Layout() {
               </NavLink>
               <NavLink to="/dashboard" className={navLinkClasses}>
                 Dashboard
+              </NavLink>
+              {/* Bell: leva pra /notificacoes, badge mostra contagem
+                  de não-lidas. Some o badge quando 0 ou undefined
+                  (ainda carregando). */}
+              <NavLink
+                to="/notificacoes"
+                className={navLinkClasses}
+                aria-label={
+                  unreadCount && unreadCount > 0
+                    ? `${unreadCount} notificações não lidas`
+                    : 'Notificações'
+                }
+              >
+                <span aria-hidden="true">◔</span>
+                {unreadCount !== undefined && unreadCount > 0 && (
+                  <span className="ml-1 inline-block bg-arcane text-parchment border border-current px-1 text-[9px]">
+                    {unreadCount}
+                  </span>
+                )}
               </NavLink>
             </>
           )}

@@ -1200,10 +1200,12 @@ export type SortKey =
   | 'price_desc'
   | 'title_asc'
   | 'title_desc'
+  | 'rating_desc'
 
 const SORT_OPTIONS: ReadonlyArray<{ key: SortKey; label: string }> = [
   { key: 'recent', label: 'Mais recentes' },
   { key: 'oldest', label: 'Mais antigos' },
+  { key: 'rating_desc', label: 'Melhor avaliados' },
   { key: 'price_asc', label: 'Preço ↑' },
   { key: 'price_desc', label: 'Preço ↓' },
   { key: 'title_asc', label: 'Título A-Z' },
@@ -1247,5 +1249,20 @@ function sortAssets(list: Asset[], key: SortKey): Asset[] {
       return copy.sort(
         (a, b) => b.title.localeCompare(a.title, 'pt-BR') || byCreatedDesc(a, b),
       )
+    case 'rating_desc':
+      // Assets sem reviews (average_rating null OU review_count 0)
+      // são empurrados pro FIM via fallback -1 — não devem vir na
+      // frente de assets com nota baixa real.
+      return copy.sort((a, b) => {
+        const ra = a.average_rating ?? -1
+        const rb = b.average_rating ?? -1
+        if (ra !== rb) return rb - ra
+        // Tiebreaker 1: count maior (mais reviews) → mais confiável.
+        const ca = a.review_count ?? 0
+        const cb = b.review_count ?? 0
+        if (ca !== cb) return cb - ca
+        // Tiebreaker 2: created_at desc.
+        return byCreatedDesc(a, b)
+      })
   }
 }

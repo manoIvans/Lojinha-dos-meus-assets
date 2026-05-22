@@ -77,6 +77,12 @@ services:
       # pra ./uploads do host via volume abaixo.
       UPLOAD_DIR: /app/uploads
 
+      # MIGRATIONS_DIR aponta pro bind mount abaixo. A API roda o
+      # migrator no boot, antes de subir o servidor — schema_migrations
+      # rastreia o que já foi aplicado, então adicionar uma migration
+      # nova é só dropar o .sql na pasta e restartar o container.
+      MIGRATIONS_DIR: /app/migrations
+
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
     volumes:
       # BIND MOUNT da pasta uploads/ local — diferente do banco que
@@ -84,6 +90,11 @@ services:
       # e gerenciar os arquivos .glb/.png direto no filesystem do host
       # (ex: backup, inspeção, mover entre máquinas).
       - ./uploads:/app/uploads
+      # Migrations bind mount read-only. Lidas no boot pela API; o
+      # mesmo diretório continua servindo o Postgres via initdb (no
+      # serviço postgres), mas o migrator garante que mudanças
+      # POSTERIORES sejam aplicadas sem precisar `docker compose down -v`.
+      - ./migrations:/app/migrations:ro
     ports:
       - "8080:8080"
     depends_on:

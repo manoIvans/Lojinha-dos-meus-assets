@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -25,15 +26,23 @@ type purchaseRepository interface {
 	Checkout(ctx context.Context, userID int64) ([]int64, error)
 	ListByUser(ctx context.Context, userID int64) ([]*domain.Purchase, error)
 	ListPurchasedIDsByUser(ctx context.Context, userID int64) ([]int64, error)
+	SellerStats(ctx context.Context, sellerID int64, recentLimit int) (*domain.SellerStats, error)
+}
+
+// notificationSink: dependência opcional do CartHandler.
+// Best-effort: falha não bloqueia o checkout.
+type notificationSink interface {
+	CreateForSoldAssets(ctx context.Context, buyerID int64, purchaseIDs []int64) error
 }
 
 type CartHandler struct {
-	cart      cartRepository
-	purchases purchaseRepository
+	cart          cartRepository
+	purchases     purchaseRepository
+	notifications notificationSink
 }
 
-func NewCartHandler(cart cartRepository, purchases purchaseRepository) *CartHandler {
-	return &CartHandler{cart: cart, purchases: purchases}
+func NewCartHandler(cart cartRepository, purchases purchaseRepository, notifications notificationSink) *CartHandler {
+	return &CartHandler{cart: cart, purchases: purchases, notifications: notifications}
 }
 
 // Add coloca um asset no carrinho do usuário do JWT. 204 em sucesso.
@@ -153,6 +162,15 @@ func (h *CartHandler) Checkout(c *gin.Context) {
 		}
 		return
 	}
+
+	// Notificações best-effort: vendedor é notificado pra cada asset
+	// vendido. Falha NÃO bloqueia o checkout (compra já está commitada);
+	// só logamos pra debug. Quando virar feature crítica, mover pra
+	// dentro da transação do Checkout no repository.
+	if err := h.notifications.CreateForSoldAssets(c.Request.Context(), userID, ids); err != nil {
+		log.Printf("notify sellers: %v", err)
+	}
+
 	c.JSON(http.StatusCreated, gin.H{"purchase_ids": ids})
 }
 
@@ -170,6 +188,25 @@ func (h *CartHandler) Library(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, purchases)
+}
+
+// StoreStats devolve o dashboard analítico do vendedor: totais
+// agregados + top asset + últimas vendas (limit fixo 10). Vive no
+// CartHandler porque consome o PurchaseRepository — não vale criar
+// um SellerHandler dedicado só pra uma rota.
+func (h *CartHandler) StoreStats(c *gin.Context) {
+	userID, ok := userIDFromContext(c)
+	if !ok {
+		return
+	}
+
+	const recentLimit = 10
+	stats, err := h.purchases.SellerStats(c.Request.Context(), userID, recentLimit)
+	if err != nil {
+		serverError(c, "seller stats", err, "falha ao calcular estatísticas")
+		return
+	}
+	c.JSON(http.StatusOK, stats)
 }
 
 // LibraryIDs: só os asset IDs comprados pelo usuário. Permite o

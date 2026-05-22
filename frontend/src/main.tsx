@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom'
 import { AuthProvider } from './auth/AuthContext'
 import { CartProvider } from './cart/CartContext'
 import { FavoritesProvider } from './favorites/FavoritesContext'
+import { NotificationsProvider } from './notifications/NotificationsContext'
 import { ToastProvider } from './components/Toast'
 import App from './App'
 import './index.css'
@@ -22,7 +23,9 @@ createRoot(document.getElementById('root')!).render(
         <ToastProvider>
           <FavoritesProvider>
             <CartProvider>
-              <App />
+              <NotificationsProvider>
+                <App />
+              </NotificationsProvider>
             </CartProvider>
           </FavoritesProvider>
         </ToastProvider>

@@ -31,6 +31,7 @@ const UserProfile = lazy(() => import('./pages/UserProfile'))
 const Favorites = lazy(() => import('./pages/Favorites'))
 const Cart = lazy(() => import('./pages/Cart'))
 const Creators = lazy(() => import('./pages/Creators'))
+const Notifications = lazy(() => import('./pages/Notifications'))
 
 // Fallback minimalista enquanto o chunk da rota carrega. Vazio de
 // propósito: em rede normal o chunk vem em ~50-100ms e qualquer
@@ -177,6 +178,17 @@ export default function App() {
               <ProtectedRoute>
                 <Suspense fallback={<RouteFallback />}>
                   <Cart />
+                </Suspense>
+              </ProtectedRoute>
+            }
+          />
+          {/* /notificacoes: lista in-app das últimas notificações. */}
+          <Route
+            path="/notificacoes"
+            element={
+              <ProtectedRoute>
+                <Suspense fallback={<RouteFallback />}>
+                  <Notifications />
                 </Suspense>
               </ProtectedRoute>
             }

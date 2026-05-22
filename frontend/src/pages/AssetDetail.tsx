@@ -1,6 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ApiError, api, fileUrl, type Asset } from '../api/client'
+import {
+  ApiError,
+  api,
+  fileUrl,
+  type Asset,
+  type Review,
+  type ReviewSummary,
+} from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { formatDate, formatPrice } from '../lib/format'
 import AssetCard from '../components/AssetCard'
@@ -8,6 +15,7 @@ import AssetCardSkeleton from '../components/AssetCardSkeleton'
 import Avatar from '../components/Avatar'
 import CartButton from '../components/CartButton'
 import FavoriteButton from '../components/FavoriteButton'
+import StarRating from '../components/StarRating'
 import { useToast } from '../components/Toast'
 import ModelViewer from '../components/ModelViewer'
 
@@ -119,6 +127,9 @@ function Detail({ asset }: { asset: Asset }) {
           <h1 className="text-2xl md:text-3xl font-bold uppercase tracking-wider break-words leading-tight">
             {asset.title}
           </h1>
+          {/* Resumo de reviews: estrelas + total. Próprio componente
+              gerencia fetch + esconde quando count = 0. */}
+          <ReviewSummaryInline assetID={asset.id} />
           {/* Linha do autor com avatar + link clicável pro perfil
               público. Quando author_username está presente (sempre,
               em respostas com JOIN), vira <Link>; quando ausente
@@ -240,6 +251,11 @@ function Detail({ asset }: { asset: Asset }) {
         </aside>
       </div>
 
+      {/* Avaliações: lista pública + form de criar/editar pra quem
+          comprou. Fetch separado do detalhe principal — falha não
+          bloqueia render do asset. */}
+      <ReviewsSection assetID={asset.id} currentUserId={currentUserId} />
+
       {/* Sessão de recomendações no fim da página: depois do usuário
           ter visto o asset, mostra outros com tags em comum.
           Fetch separado do AssetDetail principal pra não bloquear o
@@ -247,6 +263,311 @@ function Detail({ asset }: { asset: Asset }) {
       <SimilarSection assetID={asset.id} />
     </div>
   )
+}
+
+// ReviewSummaryInline: 1 linha com estrelas + "(N avaliações)" no
+// header do AssetDetail. Esconde quando count=0 — asset sem reviews
+// não deve poluir o header com "0 estrelas".
+//
+// Mantém fetch próprio (não compartilha com a lista abaixo) pra que
+// o número apareça assim que possível, antes da lista carregar.
+function ReviewSummaryInline({ assetID }: { assetID: number }) {
+  const [summary, setSummary] = useState<ReviewSummary | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setSummary(null)
+    api
+      .get<ReviewSummary>(`/api/v1/assets/${assetID}/reviews/summary`)
+      .then((s) => {
+        if (!cancelled) setSummary(s)
+      })
+      .catch(() => {
+        // Falha silenciosa: bloco esconde com summary=null.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [assetID])
+
+  if (!summary || summary.count === 0) return null
+
+  return (
+    <div className="flex items-center gap-2 text-xs uppercase tracking-widest">
+      <StarRating value={summary.average} size="sm" />
+      <span className="font-bold">{summary.average.toFixed(1)}</span>
+      <span className="text-ink/60">
+        ({summary.count} {summary.count === 1 ? 'avaliação' : 'avaliações'})
+      </span>
+    </div>
+  )
+}
+
+// ReviewsSection: lista pública de reviews + form pra quem pode
+// avaliar. Lógica:
+//   - Fetch GET /reviews em paralelo
+//   - Se usuário logado: tenta achar o review dele na lista (filter
+//     por user_id === currentUserId). Existe → modo "editar" no
+//     form. Não existe → modo "criar".
+//   - O backend valida "comprou pra avaliar" no POST. Frontend NÃO
+//     pre-checa via /library-ids: complexidade extra, e o backend
+//     rejeitar com 403 + toast é UX aceitável.
+//
+// Estados:
+//   - reviews=null → loading skeleton
+//   - reviews=[] → mensagem "Seja o primeiro a avaliar"
+//   - reviews=[...] → lista
+function ReviewsSection({
+  assetID,
+  currentUserId,
+}: {
+  assetID: number
+  currentUserId: number | null
+}) {
+  const toast = useToast()
+  const [reviews, setReviews] = useState<Review[] | null>(null)
+
+  const load = useCallback(() => {
+    let cancelled = false
+    setReviews(null)
+    api
+      .get<Review[]>(`/api/v1/assets/${assetID}/reviews`)
+      .then((data) => {
+        if (!cancelled) setReviews(data)
+      })
+      .catch(() => {
+        if (!cancelled) setReviews([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [assetID])
+
+  useEffect(() => {
+    const cancel = load()
+    return cancel
+  }, [load])
+
+  const myReview = useMemo<Review | null>(() => {
+    if (!reviews || currentUserId === null) return null
+    return reviews.find((r) => r.user_id === currentUserId) ?? null
+  }, [reviews, currentUserId])
+
+  return (
+    <section className="bg-parchment border-4 border-ink shadow-pixel">
+      <h2 className="bg-arcane text-parchment font-pixel text-xs uppercase border-b-4 border-ink px-4 py-3">
+        ▶ Avaliações
+      </h2>
+      <div className="p-4 space-y-4">
+        {/* Form: só pra usuário logado. Backend rejeita se não tiver
+            comprado — toast cobre. */}
+        {currentUserId !== null && (
+          <ReviewForm
+            assetID={assetID}
+            existing={myReview}
+            onSaved={(saved) => {
+              // Optimistic-ish: atualiza a lista local trocando o item
+              // do user pelo retornado, ou prepending se for novo.
+              setReviews((prev) => {
+                if (!prev) return prev
+                const without = prev.filter((r) => r.id !== saved.id)
+                return [saved, ...without]
+              })
+            }}
+            onDeleted={(id) => {
+              setReviews((prev) => prev?.filter((r) => r.id !== id) ?? prev)
+            }}
+            toast={toast}
+          />
+        )}
+
+        {/* Lista */}
+        {reviews === null ? (
+          <div className="text-xs uppercase tracking-widest animate-pulse">
+            ▌ Carregando avaliações...
+          </div>
+        ) : reviews.length === 0 ? (
+          <p className="text-xs text-ink/60 tracking-wider">
+            Nenhuma avaliação ainda — seja o primeiro a avaliar.
+          </p>
+        ) : (
+          <ul className="space-y-3">
+            {reviews.map((r) => (
+              <ReviewItem key={r.id} review={r} />
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  )
+}
+
+// ReviewItem: 1 linha de review com avatar, nome, estrelas, data e
+// comentário. Não mostra ações de editar/deletar — essas ficam só no
+// form do próprio usuário (visualmente separadas).
+function ReviewItem({ review }: { review: Review }) {
+  return (
+    <li className="border-2 border-ink/20 px-3 py-3 space-y-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <Avatar
+          avatarPath={review.author_avatar_path}
+          name={review.author_display_name ?? '?'}
+          size="xs"
+        />
+        {review.author_username ? (
+          <Link
+            to={`/u/${review.author_username}`}
+            className="text-xs font-bold uppercase tracking-wider hover:text-arcane hover:underline underline-offset-4 decoration-2"
+          >
+            {review.author_display_name ?? review.author_username}
+          </Link>
+        ) : (
+          <span className="text-xs font-bold uppercase tracking-wider">
+            {review.author_display_name ?? 'anônimo'}
+          </span>
+        )}
+        <StarRating value={review.rating} size="sm" />
+        <span className="text-[10px] text-ink/60 tracking-wider ml-auto">
+          {formatDate(review.created_at)}
+        </span>
+      </div>
+      {review.comment.trim() && (
+        <p className="text-sm leading-relaxed whitespace-pre-wrap">
+          {review.comment}
+        </p>
+      )}
+    </li>
+  )
+}
+
+// ReviewForm: formulário de criar/editar review do próprio usuário.
+// Modo determinado por `existing`:
+//   - null: form vazio com botão "Avaliar"
+//   - Review: form pré-populado com botão "Atualizar" + "Excluir"
+function ReviewForm({
+  assetID,
+  existing,
+  onSaved,
+  onDeleted,
+  toast,
+}: {
+  assetID: number
+  existing: Review | null
+  onSaved: (saved: Review) => void
+  onDeleted: (id: number) => void
+  toast: ReturnType<typeof useToast>
+}) {
+  const [rating, setRating] = useState(existing?.rating ?? 0)
+  const [comment, setComment] = useState(existing?.comment ?? '')
+  const [submitting, setSubmitting] = useState(false)
+
+  // Sync quando o existing muda (vem da lista após fetch ou
+  // após onSaved).
+  useEffect(() => {
+    setRating(existing?.rating ?? 0)
+    setComment(existing?.comment ?? '')
+  }, [existing?.id])
+
+  async function handleSubmit() {
+    if (rating < 1 || rating > 5) {
+      toast.error('Escolha de 1 a 5 estrelas')
+      return
+    }
+    setSubmitting(true)
+    try {
+      const body = { rating, comment: comment.trim() }
+      const saved = existing
+        ? await api.put<Review>(`/api/v1/reviews/${existing.id}`, body)
+        : await api.post<Review>(`/api/v1/assets/${assetID}/reviews`, body)
+      onSaved(saved)
+      toast.success(existing ? 'Avaliação atualizada' : 'Avaliação publicada')
+    } catch (err) {
+      toast.error(messageForReview(err))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleDelete() {
+    if (!existing) return
+    setSubmitting(true)
+    try {
+      await api.delete(`/api/v1/reviews/${existing.id}`)
+      onDeleted(existing.id)
+      toast.success('Avaliação removida')
+      setRating(0)
+      setComment('')
+    } catch (err) {
+      toast.error(messageForReview(err))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="bg-parchment border-2 border-ink shadow-pixel-sm p-3 space-y-3">
+      <p className="text-[10px] font-bold uppercase tracking-widest text-ink/70">
+        ▸ {existing ? 'Sua avaliação' : 'Deixe sua avaliação'}
+      </p>
+      <StarRating value={rating} onChange={setRating} size="lg" />
+      <textarea
+        rows={2}
+        maxLength={2000}
+        value={comment}
+        onChange={(e) => setComment(e.target.value)}
+        placeholder="Comentário (opcional)"
+        className="
+          block w-full bg-white text-ink border-2 border-ink
+          px-2 py-1 text-xs font-mono
+          focus:outline-none focus:shadow-pixel-sm
+        "
+      />
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={handleSubmit}
+          disabled={submitting || rating < 1}
+          className="
+            bg-arcane text-parchment border-2 border-ink shadow-pixel-sm
+            px-3 py-1 text-[10px] font-bold uppercase tracking-widest
+            transition-all duration-75 ease-out
+            hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none
+            disabled:opacity-50 disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-pixel-sm
+          "
+        >
+          {submitting ? '...' : existing ? '▶ Atualizar' : '▶ Avaliar'}
+        </button>
+        {existing && (
+          <button
+            type="button"
+            onClick={handleDelete}
+            disabled={submitting}
+            className="
+              bg-ink text-parchment border-2 border-ink shadow-pixel-sm
+              px-3 py-1 text-[10px] font-bold uppercase tracking-widest
+              transition-all duration-75 ease-out
+              hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none
+              disabled:opacity-50
+            "
+          >
+            ✗ Remover
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// messageForReview: traduz erros conhecidos. 403 sem compra é o caso
+// mais comum (UX: usuário tenta avaliar sem ter comprado).
+function messageForReview(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 403) return 'É preciso comprar o asset pra avaliar'
+    if (err.status === 409) return 'Você já avaliou este asset'
+    const body = err.body as { error?: string } | string
+    if (typeof body === 'object' && body?.error) return body.error
+  }
+  return 'Falha ao salvar avaliação'
 }
 
 // SimilarSection: busca e renderiza assets similares no fim da página.

@@ -27,6 +27,10 @@ type Config struct {
 	// só o frontend (Vite em :5173 em dev). Múltiplas origens separadas
 	// por vírgula na env var.
 	AllowedOrigins []string
+	// MigrationsDir é a pasta com os arquivos .sql aplicados no boot.
+	// Default "migrations" assume execução com CWD na raiz do projeto;
+	// em Docker, montamos a pasta em /app/migrations e setamos via env.
+	MigrationsDir string
 }
 
 // Load lê o arquivo .env (se existir) e popula a struct Config.
@@ -54,6 +58,7 @@ func Load() (*Config, error) {
 		JWTTTL:         time.Duration(ttlHours) * time.Hour,
 		UploadDir:      getEnv("UPLOAD_DIR", "uploads"),
 		AllowedOrigins: parseOrigins(getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173")),
+		MigrationsDir:  getEnv("MIGRATIONS_DIR", "migrations"),
 	}
 
 	// DATABASE_URL não tem default por design: rodar o servidor sem

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -200,6 +201,91 @@ func (r *PurchaseRepository) ListByUser(ctx context.Context, userID int64) ([]*d
 		return nil, fmt.Errorf("iterate purchases: %w", err)
 	}
 	return out, nil
+}
+
+// SellerStats agrega métricas de vendas dos assets que pertencem
+// ao `sellerID`. Tudo via JOIN purchases ↔ assets ↔ users(buyer).
+//
+// Múltiplas queries (totais, top asset, recent sales) em vez de
+// uma única consolidada — Postgres lida bem com vários SELECTs
+// independentes, e separar mantém cada SQL fácil de revisar/index.
+//
+// Ignoramos linhas com asset_id IS NULL (vendedor deletou o asset
+// depois da compra): elas continuam no histórico do COMPRADOR mas
+// não fazem sentido aqui — o vendedor já não tem o produto.
+func (r *PurchaseRepository) SellerStats(ctx context.Context, sellerID int64, recentLimit int) (*domain.SellerStats, error) {
+	stats := &domain.SellerStats{
+		RecentSales: make([]*domain.SaleSummary, 0),
+	}
+
+	// 1) Totais agregados — count, sum, buyers distintos numa query só.
+	const aggQ = `
+		SELECT
+			COUNT(*) AS total_sales,
+			COALESCE(SUM(p.price_cents_snapshot), 0) AS revenue,
+			COUNT(DISTINCT p.user_id) AS unique_buyers
+		  FROM purchases p
+		  JOIN assets a ON a.id = p.asset_id
+		 WHERE a.owner_id = $1`
+	if err := r.db.QueryRow(ctx, aggQ, sellerID).Scan(
+		&stats.TotalSales, &stats.RevenueCents, &stats.UniqueBuyers,
+	); err != nil {
+		return nil, fmt.Errorf("seller stats aggregate: %w", err)
+	}
+
+	// 2) Top asset (asset mais vendido). GROUP BY a.id + ORDER BY count
+	// DESC + LIMIT 1. Se vendedor ainda não vendeu nada, query retorna
+	// 0 linhas — tratamos com pgx.ErrNoRows e mantemos TopAsset = nil.
+	const topQ = `
+		SELECT a.id, a.title, COUNT(*) AS sales
+		  FROM purchases p
+		  JOIN assets a ON a.id = p.asset_id
+		 WHERE a.owner_id = $1
+		 GROUP BY a.id, a.title
+		 ORDER BY sales DESC, a.id ASC
+		 LIMIT 1`
+	top := &domain.TopAsset{}
+	if err := r.db.QueryRow(ctx, topQ, sellerID).Scan(
+		&top.AssetID, &top.Title, &top.Sales,
+	); err == nil {
+		stats.TopAsset = top
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("seller stats top asset: %w", err)
+	}
+
+	// 3) Recent sales — últimas N. JOIN com users pra trazer o
+	// nome do comprador (LEFT JOIN não precisa: user_id NOT NULL na
+	// FK do schema).
+	const recentQ = `
+		SELECT p.id, a.id, a.title, u.username, u.display_name,
+		       p.price_cents_snapshot, p.purchased_at
+		  FROM purchases p
+		  JOIN assets a ON a.id = p.asset_id
+		  JOIN users u ON u.id = p.user_id
+		 WHERE a.owner_id = $1
+		 ORDER BY p.purchased_at DESC
+		 LIMIT $2`
+	rows, err := r.db.Query(ctx, recentQ, sellerID, recentLimit)
+	if err != nil {
+		return nil, fmt.Errorf("seller stats recent: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		s := &domain.SaleSummary{}
+		if err := rows.Scan(
+			&s.PurchaseID, &s.AssetID, &s.AssetTitle,
+			&s.BuyerUsername, &s.BuyerDisplayName,
+			&s.PriceCentsSnapshot, &s.PurchasedAt,
+		); err != nil {
+			return nil, fmt.Errorf("seller stats scan recent: %w", err)
+		}
+		stats.RecentSales = append(stats.RecentSales, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("seller stats iterate recent: %w", err)
+	}
+
+	return stats, nil
 }
 
 // IsPurchased: o user já comprou este asset? Usado pelo frontend pra
