@@ -1,8 +1,8 @@
 # ManoMesh
 
-Marketplace de assets 3D com estética pixel-art / RPG retrô. Catálogo público, perfis com avatar, favoritos, carrinho + checkout (stub), biblioteca de compras, viewer 3D interativo e filtros multi-facet.
+Marketplace de assets 3D com estética pixel-art / RPG retrô. Catálogo público, perfis com avatar, favoritos, carrinho + checkout (stub), biblioteca de compras, avaliações com estrelas, notificações in-app, dashboard analítico do vendedor, viewer 3D interativo e filtros multi-facet.
 
-> Repo: `Lojinha-dos-meus-assets` (nome do diretório/Go module — `ManoMesh` é o nome de marca exibido aos usuários).
+> Repo no GitHub: `manoIvans/ManoMesh`. O nome do Go module continua `github.com/manoIvans/lojinha-assets` (rename do módulo é refactor separado).
 
 ---
 
@@ -38,11 +38,24 @@ Marketplace de assets 3D com estética pixel-art / RPG retrô. Catálogo públic
 - Editar/deletar pelo `OwnerPanel` no `/asset/:id`
 - Trocar thumbnail/modelo independentemente dos metadados (rotas multipart separadas)
 - "Minha Loja" (`/my-store`): grid dos próprios assets
+- **Dashboard analítico** em `/my-store`: total de vendas, receita, compradores únicos, asset mais vendido e tabela de últimas vendas (com link pro perfil do comprador)
 
 ### Comércio
 - Favoritos (`/favoritos`) — coração no card e detalhe, optimistic update
 - Carrinho (`/carrinho`) — adicionar/remover, total, checkout stub (cria `purchases` sem pagamento real)
 - Biblioteca (`/library`) — histórico de compras com link de download do modelo
+
+### Avaliações
+- Estrelas 1-5 + comentário (somente quem comprou pode avaliar; um review por usuário por asset)
+- Média + total visíveis no `AssetCard` (galeria/listas) e no `AssetDetail` (header)
+- Sort "Melhor avaliados" na galeria
+- Form de criar/editar/excluir o próprio review no `AssetDetail`
+
+### Notificações
+- Bell no header com badge de não-lidas (polling 60s + refetch quando volta à aba)
+- Página `/notificacoes` com lista das últimas 50 + botão "marcar todas como lidas"
+- Tipos suportados: `asset_sold` (compraram seu asset), `asset_reviewed` (avaliaram seu asset)
+- Gerados via hooks no `Checkout` e `ReviewCreate` (best-effort: falha não bloqueia fluxo principal)
 
 ### Viewer 3D
 - `/asset/:id` mostra o modelo via three.js/R3F
@@ -57,10 +70,11 @@ Marketplace de assets 3D com estética pixel-art / RPG retrô. Catálogo públic
 ├─ internal/
 │  ├─ auth/                  # JWT + token manager
 │  ├─ domain/                # entities + sentinel errors (User, Asset, Purchase, TagCount…)
-│  ├─ repository/postgres/   # 1 repo por agregado (UserRepo, AssetRepo, FavoriteRepo, CartRepo, PurchaseRepo)
+│  ├─ migrate/               # runner que aplica migrations no boot da API
+│  ├─ repository/postgres/   # 1 repo por agregado (User, Asset, Favorite, Cart, Purchase, Review, Notification)
 │  ├─ storage/               # LocalStorage pra uploads (thumbnail/model/avatar)
 │  └─ transport/http/
-│     ├─ handler/            # AssetHandler, UserHandler, CartHandler, FavoriteHandler, AuthHandler, HealthHandler
+│     ├─ handler/            # Asset, User, Cart, Favorite, Auth, Review, Notification, Health
 │     ├─ middleware/         # CORS, RequireAuth
 │     ├─ server.go           # router + DI
 │     └─ static.go           # /uploads/* com Cache-Control immutable
@@ -70,12 +84,13 @@ Marketplace de assets 3D com estética pixel-art / RPG retrô. Catálogo públic
 │     ├─ auth/               # AuthContext, AuthInterceptor (401 global), ProtectedRoute
 │     ├─ cart/               # CartContext (cart + purchased ids)
 │     ├─ favorites/          # FavoritesContext
-│     ├─ components/         # AssetCard, Avatar, FavoriteButton, CartButton, Toast, ModelViewer, LineSkeleton…
+│     ├─ notifications/      # NotificationsContext (polling 60s + visibility)
+│     ├─ components/         # AssetCard, Avatar, FavoriteButton, CartButton, Toast, ModelViewer, StarRating, LineSkeleton…
 │     ├─ lib/                # format.ts, money.ts, tags.ts (helpers compartilhados)
 │     ├─ styles/pixel.ts     # PIXEL_BTN, PIXEL_INPUT, ASSET_GRID_CLASSES
 │     ├─ pages/              # 1 arquivo por rota
 │     └─ App.tsx             # Routes
-├─ migrations/               # 008 arquivos SQL, ordem importante
+├─ migrations/               # 010 arquivos SQL, ordem importante
 ├─ uploads/                  # bind mount: thumbnails/, models/, avatars/
 ├─ Dockerfile                # multi-stage build da API
 ├─ docker-compose.yml        # Postgres + API
@@ -98,11 +113,7 @@ cp .env.example .env
 docker compose up --build -d
 ```
 
-As migrations `001-008` rodam automaticamente **na primeira inicialização** do volume `postgres_data` (via `/docker-entrypoint-initdb.d`). Em re-deploys posteriores você precisa aplicar migrations novas manualmente:
-
-```bash
-docker exec -i lojinha-postgres psql -U postgres -d lojinha_assets < migrations/008_perf_indices.sql
-```
+A API tem um **migrator embutido** (`internal/migrate`) que roda no boot, lê `migrations/*.sql` (bind mount em `/app/migrations`) e aplica o que não está em `schema_migrations`. Adicionar uma migration nova é só dropar o arquivo na pasta e `docker compose restart api` — sem `docker exec ... psql` manual. Idempotente com o initdb do Postgres (que roda só na 1ª init do volume).
 
 Pra resetar do ZERO (apaga DB e uploads):
 ```bash
@@ -161,11 +172,13 @@ Todas as rotas em `/api/v1/*`. Health check em `/ping`. Uploads servidos em `/up
 - `POST /login` — body `{email, password}` → `{token}`
 
 ### Assets (público)
-- `GET /assets` — lista catálogo
+- `GET /assets` — lista catálogo (inclui `average_rating` + `review_count`)
 - `GET /assets/:id` — detalhe
 - `GET /assets/:id/similar?limit=N` — recomendações por tag overlap (default 4, cap 20)
 - `GET /trending?limit=N` — top vendidos (default 8, cap 50)
 - `GET /tags` — `[{tag, count}]`
+- `GET /assets/:id/reviews` — lista de reviews do asset
+- `GET /assets/:id/reviews/summary` — `{average, count}`
 
 ### Assets (protegido — `Authorization: Bearer <jwt>`)
 - `POST /assets` — multipart: title, description, tags[], price_cents, thumbnail, model
@@ -191,9 +204,20 @@ Todas as rotas em `/api/v1/*`. Health check em `/ping`. Uploads servidos em `/up
 - `POST /assets/:id/cart` · `DELETE /assets/:id/cart`
 - `GET /my/cart` · `DELETE /my/cart` (clear)
 - `GET /my/cart-ids` — `{ids: int[]}`
-- `POST /my/cart/checkout` — cria `purchases`, esvazia carrinho, retorna `{purchase_ids: int[]}`
+- `POST /my/cart/checkout` — cria `purchases`, esvazia carrinho, retorna `{purchase_ids: int[]}`. Hook gera notificação `asset_sold` pra cada vendedor.
 - `GET /my/library` — `Purchase[]` (com asset aninhado; null se vendedor deletou)
 - `GET /my/library-ids` — `{ids: int[]}`
+- `GET /my/store/stats` — dashboard: `{total_sales, revenue_cents, unique_buyers, top_asset, recent_sales}`
+
+### Reviews (protegido)
+- `POST /assets/:id/reviews` — body `{rating 1-5, comment}`. Requer compra prévia (403 sem). Hook notifica dono.
+- `PUT /reviews/:id` — edita próprio review
+- `DELETE /reviews/:id` — exclui próprio
+
+### Notificações (protegido)
+- `GET /my/notifications` — últimas 50 com `asset_title` + dados do actor (LEFT JOIN, podem vir null)
+- `GET /my/notifications/unread-count` — `{count}` (endpoint leve pra polling)
+- `POST /my/notifications/read-all` — marca tudo como lido
 
 ### Códigos comuns
 - `400` payload inválido
@@ -220,6 +244,8 @@ Sequenciais, idempotentes (`IF NOT EXISTS`). Schema atual:
 | 006 | `favorites(user_id, asset_id, created_at)` PK composta + index inverso |
 | 007 | `cart_items` + `purchases` (com `price_cents_snapshot` imutável; asset_id SET NULL no delete pra preservar histórico) |
 | 008 | Índices em `created_at`/`added_at`/`purchased_at` pros ORDER BY DESC |
+| 009 | `reviews(asset_id, user_id, rating 1-5, comment)` UNIQUE(asset_id, user_id), CHECK rating, index por (asset_id, created_at DESC) |
+| 010 | `notifications(user_id, type, asset_id, actor_user_id, read_at)` com CHECK enum (`asset_sold`/`asset_reviewed`) + index parcial WHERE read_at IS NULL pra UnreadCount rápido |
 
 ---
 
@@ -234,7 +260,8 @@ Sequenciais, idempotentes (`IF NOT EXISTS`). Schema atual:
 - **Gzip nas respostas JSON** (exceto `/uploads` que já é binário comprimido).
 - **Bundle splitting** (react/router/three vendor chunks) — atualizar nosso código não invalida `three` (876 kB) no cache do browser.
 - **Lazy load** das rotas via `React.lazy` + `Suspense`. `three` filtrado do `modulePreload` pra que home não baixe sem precisar.
-- **Migrations só rodam automaticamente na 1ª init** do volume — releases subsequentes exigem aplicação manual. Migrator embutido é TODO.
+- **Migrator embutido no boot da API** (`internal/migrate`): tracking em `schema_migrations`, idempotente com o initdb do Postgres. Adicionar migration nova é só dropar `.sql` em `migrations/` e restartar o container.
+- **Notificações best-effort**: hooks pós-Checkout e pós-Review.Create. Falha do INSERT em `notifications` é só logada — UX principal (compra/review) sempre completa. Quando virar feature crítica, mover pra dentro da mesma transação.
 
 ---
 
@@ -262,9 +289,8 @@ curl -s http://localhost:8080/api/v1/assets | head
 
 ## Roadmap (não implementado)
 
-- Avaliações com estrelas + comentário (só quem comprou)
-- Dashboard analítico do vendedor (receita, vendas, asset mais popular)
-- Sistema de notificações
-- Migrator embutido no boot da API (eliminar aplicação manual)
 - Testes automatizados (backend usa interface-driven design — testes ficam triviais com mocks)
-- Payment gateway real (hoje é stub)
+- Payment gateway real (hoje é stub que só cria `purchases`)
+- Notificação `purchase_confirmation` pro comprador (hoje só o vendedor é notificado)
+- Paginação nos listings públicos (`/assets`, `/users`) quando o catálogo crescer
+- Rename do Go module `lojinha-assets` → `manomesh` (refactor de imports em ~20 arquivos)
