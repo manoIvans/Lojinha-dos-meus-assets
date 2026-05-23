@@ -135,13 +135,38 @@ Abre em `http://localhost:5173`.
 ### 3. Validações
 
 ```bash
-# Backend
+# Backend — build + tests
 go build ./...
+go test ./...
 
 # Frontend
 cd frontend && npx tsc --noEmit
 cd frontend && npm run build  # produção
 ```
+
+---
+
+## Testes
+
+50 testes de handler no backend ([internal/transport/http/handler/*_test.go](internal/transport/http/handler/)). Cobrem caminhos felizes + mapeamento de erro sentinel (404/403/409) + side-effects importantes (cleanup de arquivos no delete, hooks de notificação pós-checkout/review). Não tocam no banco — usam mocks das interfaces (`fakeUserRepo`, `fakeAssetRepo`, `fakeNotificationSink`, etc.) definidos em [testhelpers_test.go](internal/transport/http/handler/testhelpers_test.go).
+
+Padrão dos mocks: cada interface tem um struct fake com campos `XxxFn func(...)`. Se o teste **não configura** uma função e ela é chamada, panic — esquecimento de mock vira falha óbvia em vez de nil pointer no fundo. Notification sink captura chamadas (`SoldAssetsCalls`, `ForReviewCalls`) pra que testes verifiquem hooks dispararam com args corretos.
+
+Cobertura por handler:
+- **Auth** (7): register sucesso + conflitos email/username + validação; login com bcrypt real + mensagem anti-enumeration
+- **Asset** (13): GetByID, Update, Delete (com cleanup), Similar (cap), Trending, Tags, MyAssets
+- **User** (8): GetMe, GetByUsername (regression check: PublicUser não vaza email), UpdateMe, List
+- **Cart** (6): Add (self-purchase), Checkout (notificação dispara + carrinho vazio)
+- **Favorite** (5): Add/Remove idempotentes, List/ListIDs
+- **Review** (4 cases + 3 subtestes): Create exige compra, conflito UNIQUE, rating fora de 1-5
+- **Notification** (3): List, UnreadCount (formato `{count}`), MarkAllRead
+
+Pra rodar verboso: `go test ./internal/transport/http/handler/ -v`.
+
+Não cobertos por ora (escopo maior):
+- Repository tests (precisam Postgres via testcontainers-go ou DSN de teste)
+- Upload multipart (Create do asset, avatar upload) — setup do request multipart é trabalhoso
+- Frontend (vitest setup pendente; helpers em `lib/` são puros e fáceis de testar)
 
 ---
 
@@ -289,7 +314,8 @@ curl -s http://localhost:8080/api/v1/assets | head
 
 ## Roadmap (não implementado)
 
-- Testes automatizados (backend usa interface-driven design — testes ficam triviais com mocks)
+- Tests de repository com Postgres real (testcontainers-go) + tests de upload multipart
+- Tests do frontend (vitest pros helpers em `lib/` e sortAssets/parseSort da Gallery)
 - Payment gateway real (hoje é stub que só cria `purchases`)
 - Notificação `purchase_confirmation` pro comprador (hoje só o vendedor é notificado)
 - Paginação nos listings públicos (`/assets`, `/users`) quando o catálogo crescer
