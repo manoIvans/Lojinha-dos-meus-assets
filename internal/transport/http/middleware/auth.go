@@ -6,7 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/manoIvans/lojinha-assets/internal/auth"
+	"github.com/manoIvans/manomesh/internal/auth"
 )
 
 // ContextUserIDKey é a chave usada no gin.Context para o ID do

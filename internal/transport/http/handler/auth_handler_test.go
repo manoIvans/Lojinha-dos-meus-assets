@@ -9,8 +9,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/manoIvans/lojinha-assets/internal/auth"
-	"github.com/manoIvans/lojinha-assets/internal/domain"
+	"github.com/manoIvans/manomesh/internal/auth"
+	"github.com/manoIvans/manomesh/internal/domain"
 )
 
 // Testes do AuthHandler. Cobrem o caminho feliz e os erros mais

@@ -34,6 +34,21 @@ var ErrAlreadyPurchased = errors.New("asset já comprado anteriormente")
 // a comprar.
 var ErrCartEmpty = errors.New("carrinho vazio")
 
+// ErrSessionNotFound: checkout session com ID inexistente (ou não
+// pertence ao usuário). Mapeado pra 404 — não diferenciamos "outro
+// dono" de "não existe" pra não vazar info.
+var ErrSessionNotFound = errors.New("sessão de checkout não encontrada")
+
+// ErrSessionExpired: sessão passou do prazo (30min). Mapeado pra 410
+// Gone — o recurso existiu, mas não está mais utilizável; cliente
+// precisa criar novo checkout.
+var ErrSessionExpired = errors.New("sessão de checkout expirada")
+
+// ErrSessionInvalidState: tentativa de confirmar uma sessão que não
+// está pending (ex: já 'failed' ou 'expired'). 'paid' NÃO cai aqui —
+// confirmar paid é idempotente e devolve sucesso. Mapeado pra 409.
+var ErrSessionInvalidState = errors.New("sessão em estado inválido para esta operação")
+
 // ErrReviewExists é retornado quando o usuário tenta criar um
 // review pro asset que já avaliou. UI deveria oferecer EDITAR, não
 // POST duplicado — mas o backend protege via UNIQUE constraint.
@@ -129,22 +144,82 @@ type SaleSummary struct {
 	PurchasedAt        time.Time `json:"purchased_at"`
 }
 
+// PurchaseStatus rastreia o estado do pagamento de uma compra.
+// Estado vive em sincronia com o status da CheckoutSession-pai:
+//
+//	'pending'  — sessão criada, aguardando confirmação do provedor
+//	'paid'     — provedor confirmou pagamento; compra é "real"
+//	'failed'   — pagamento recusado (cartão, fraude, etc.)
+//	'refunded' — futuro: estorno após paid (não implementado ainda)
+//
+// Library/SellerStats filtram só 'paid' — pending NÃO conta como
+// compra do ponto de vista do comprador OU do vendedor.
+type PurchaseStatus string
+
+const (
+	PurchasePending  PurchaseStatus = "pending"
+	PurchasePaid     PurchaseStatus = "paid"
+	PurchaseFailed   PurchaseStatus = "failed"
+	PurchaseRefunded PurchaseStatus = "refunded"
+)
+
 // Purchase é o registro IMUTÁVEL de uma compra. price_cents_snapshot
 // preserva o preço pago, ignorando reajustes futuros do dono. Asset
 // pode ser nil (campo aninhado opcional preenchido via JOIN) se o
 // vendedor deletou o asset depois da compra — o registro permanece
 // mas perde o conteúdo associado.
 //
+// Status: 'pending' enquanto a sessão de pagamento não é confirmada;
+// 'paid' depois que o webhook (ou stub de confirmação) marca como
+// pago. Só purchases 'paid' aparecem na Library do comprador.
+//
 // Devolvido pelo GET /api/v1/my/library; o asset aninhado tem os
 // mesmos campos do Asset normal pra que o frontend reuse o card.
 type Purchase struct {
-	ID                 int64     `json:"id"`
-	UserID             int64     `json:"user_id"`
-	PriceCentsSnapshot int64     `json:"price_cents_snapshot"`
-	PurchasedAt        time.Time `json:"purchased_at"`
+	ID                 int64          `json:"id"`
+	UserID             int64          `json:"user_id"`
+	Status             PurchaseStatus `json:"status"`
+	PriceCentsSnapshot int64          `json:"price_cents_snapshot"`
+	PurchasedAt        time.Time      `json:"purchased_at"`
 	// Asset é nil se o vendedor deletou o asset depois da compra.
 	// O front mostra "asset removido" quando isso acontece.
 	Asset *Asset `json:"asset,omitempty"`
+}
+
+// CheckoutSessionStatus rastreia o estado da tentativa de pagamento.
+// Espelha o que provedores reais (Stripe, MercadoPago) usam: pending
+// até o cliente confirmar, paid quando o webhook chega, failed/expired
+// nos casos de rejeição/timeout.
+type CheckoutSessionStatus string
+
+const (
+	SessionPending CheckoutSessionStatus = "pending"
+	SessionPaid    CheckoutSessionStatus = "paid"
+	SessionFailed  CheckoutSessionStatus = "failed"
+	SessionExpired CheckoutSessionStatus = "expired"
+)
+
+// CheckoutSession é a "tentativa de pagamento" — em provedor real
+// corresponderia a um Stripe PaymentIntent ou MercadoPago Preference.
+// No modo stub, é só uma row interna que o frontend "redireciona" pra
+// uma página de simulação e depois confirma manualmente.
+//
+// ID é UUID pra não vazar contagem; Provider/ProviderSessionID guardam
+// referência ao provedor externo (stub agora, real depois). ExpiresAt
+// é 30min após criação — depois disso a sessão não pode ser confirmada.
+type CheckoutSession struct {
+	ID                string                `json:"id"`
+	UserID            int64                 `json:"user_id"`
+	Status            CheckoutSessionStatus `json:"status"`
+	Provider          string                `json:"provider"`
+	ProviderSessionID *string               `json:"provider_session_id,omitempty"`
+	TotalCents        int64                 `json:"total_cents"`
+	CreatedAt         time.Time             `json:"created_at"`
+	ExpiresAt         time.Time             `json:"expires_at"`
+	PaidAt            *time.Time            `json:"paid_at,omitempty"`
+	// PurchaseIDs aninhados pra que o frontend descubra o que foi
+	// comprado sem GET extra. Populado em Create e Confirm.
+	PurchaseIDs []int64 `json:"purchase_ids,omitempty"`
 }
 
 // Review representa uma avaliação de asset feita por um usuário
@@ -180,8 +255,9 @@ type ReviewSummary struct {
 type NotificationType string
 
 const (
-	NotificationAssetSold     NotificationType = "asset_sold"
-	NotificationAssetReviewed NotificationType = "asset_reviewed"
+	NotificationAssetSold            NotificationType = "asset_sold"
+	NotificationAssetReviewed        NotificationType = "asset_reviewed"
+	NotificationPurchaseConfirmation NotificationType = "purchase_confirmation"
 )
 
 // Notification representa uma linha da tabela notifications.

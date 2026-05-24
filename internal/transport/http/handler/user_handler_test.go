@@ -7,7 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/manoIvans/lojinha-assets/internal/domain"
+	"github.com/manoIvans/manomesh/internal/domain"
 )
 
 // Testes do UserHandler. Cobre GetMe, GetByUsername, UpdateMe e List
@@ -172,5 +172,39 @@ func TestList_LimitCapped(t *testing.T) {
 	}
 	eng := setupUsers(t, repo, 0)
 	w := doJSON(t, eng, http.MethodGet, "/users?limit=999", nil, "")
+	assertStatus(t, w, http.StatusOK)
+}
+
+func TestList_Paginated(t *testing.T) {
+	// Com ?page=, handler usa ListWithAssetCountPaginated e devolve
+	// envelope. ListWithAssetCount (legado) NÃO deve ser chamado.
+	repo := &fakeUserProfileRepo{
+		ListWithCountPageFn: func(_ context.Context, page, pageSize int) ([]*domain.PublicUser, int64, error) {
+			if page != 3 || pageSize != 20 {
+				t.Errorf("page/size: want 3/20, got %d/%d", page, pageSize)
+			}
+			return []*domain.PublicUser{{ID: 1, Username: "ivan"}}, 7, nil
+		},
+	}
+	eng := setupUsers(t, repo, 0)
+	w := doJSON(t, eng, http.MethodGet, "/users?page=3", nil, "")
+	assertStatus(t, w, http.StatusOK)
+	body := decodeJSON(t, w)
+	if body["total"] != float64(7) {
+		t.Errorf("envelope total errado: %v", body)
+	}
+}
+
+func TestList_PageSizeCapped(t *testing.T) {
+	repo := &fakeUserProfileRepo{
+		ListWithCountPageFn: func(_ context.Context, _, pageSize int) ([]*domain.PublicUser, int64, error) {
+			if pageSize != 100 {
+				t.Errorf("page_size deveria ser clampado em 100, got %d", pageSize)
+			}
+			return []*domain.PublicUser{}, 0, nil
+		},
+	}
+	eng := setupUsers(t, repo, 0)
+	w := doJSON(t, eng, http.MethodGet, "/users?page=1&page_size=9999", nil, "")
 	assertStatus(t, w, http.StatusOK)
 }

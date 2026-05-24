@@ -3,30 +3,40 @@ import { Link } from 'react-router-dom'
 import { api, type PublicUser } from '../api/client'
 import Avatar from '../components/Avatar'
 
-// /criadores: diretório de todos os usuários. Cards clicáveis levam
+// /criadores: diretório paginado dos usuários. Cards clicáveis levam
 // pra /u/:username (a "loja" individual).
 //
-// Mesma estrutura mental da Gallery — Hero + Grid + estados.
-// Como esperamos relativamente poucos usuários (muito menos que
-// assets), sem paginação por ora.
+// Paginação opt-in do backend: passamos ?page=N&page_size=24 pra
+// receber o envelope {items, page, page_size, total}. Cliente controla
+// a página atual em state local — sem refletir na URL por enquanto
+// (compromisso entre simplicidade e link compartilhável).
 
+const PAGE_SIZE = 24
 const SKELETON_COUNT = 8
 const GRID_CLASSES =
   'grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4'
 
+type CreatorsPage = {
+  items: PublicUser[]
+  page: number
+  page_size: number
+  total: number
+}
+
 export default function Creators() {
-  const [users, setUsers] = useState<PublicUser[] | null>(null)
+  const [page, setPage] = useState(1)
+  const [data, setData] = useState<CreatorsPage | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(() => {
+  const load = useCallback((p: number) => {
     setError(null)
-    setUsers(null)
+    setData(null)
     let cancelled = false
 
     api
-      .get<PublicUser[]>('/api/v1/users')
-      .then((data) => {
-        if (!cancelled) setUsers(data)
+      .get<CreatorsPage>(`/api/v1/users?page=${p}&page_size=${PAGE_SIZE}`)
+      .then((d) => {
+        if (!cancelled) setData(d)
       })
       .catch(() => {
         if (!cancelled) setError('Falha ao carregar criadores.')
@@ -38,26 +48,39 @@ export default function Creators() {
   }, [])
 
   useEffect(() => {
-    const cancel = load()
+    const cancel = load(page)
     return cancel
-  }, [load])
+  }, [load, page])
+
+  const totalPages = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1
 
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-6">
       <Hero
-        count={error ? null : users?.length ?? null}
-        loading={!error && users === null}
+        total={error ? null : data?.total ?? null}
+        loading={!error && data === null}
       />
-      <Content users={users} error={error} onRetry={load} />
+      <Content
+        items={data?.items ?? null}
+        error={error}
+        onRetry={() => load(page)}
+      />
+      {data && data.total > 0 && (
+        <Pager
+          page={page}
+          totalPages={totalPages}
+          onChange={setPage}
+        />
+      )}
     </div>
   )
 }
 
 function Hero({
-  count,
+  total,
   loading,
 }: {
-  count: number | null
+  total: number | null
   loading: boolean
 }) {
   return (
@@ -70,27 +93,27 @@ function Hero({
           Aventureiros da ManoMesh
         </h1>
         <p className="text-xs uppercase tracking-widest text-ink/60 mt-1">
-          ▸ {subtitle(count, loading)}
+          ▸ {subtitle(total, loading)}
         </p>
       </div>
     </header>
   )
 }
 
-function subtitle(count: number | null, loading: boolean): string {
+function subtitle(total: number | null, loading: boolean): string {
   if (loading) return 'Carregando criadores...'
-  if (count === null) return 'Falha ao carregar'
-  if (count === 0) return 'Nenhum criador ainda'
-  if (count === 1) return '1 criador'
-  return `${count} criadores`
+  if (total === null) return 'Falha ao carregar'
+  if (total === 0) return 'Nenhum criador ainda'
+  if (total === 1) return '1 criador'
+  return `${total} criadores`
 }
 
 function Content({
-  users,
+  items,
   error,
   onRetry,
 }: {
-  users: PublicUser[] | null
+  items: PublicUser[] | null
   error: string | null
   onRetry: () => void
 }) {
@@ -118,7 +141,7 @@ function Content({
     )
   }
 
-  if (users === null) {
+  if (items === null) {
     return (
       <div className={GRID_CLASSES} aria-busy="true" aria-live="polite">
         {Array.from({ length: SKELETON_COUNT }).map((_, i) => (
@@ -128,7 +151,7 @@ function Content({
     )
   }
 
-  if (users.length === 0) {
+  if (items.length === 0) {
     return (
       <div className="bg-parchment border-4 border-ink shadow-pixel p-12 text-center">
         <p className="text-5xl mb-4" aria-hidden="true">
@@ -143,10 +166,66 @@ function Content({
 
   return (
     <div className={GRID_CLASSES}>
-      {users.map((u) => (
+      {items.map((u) => (
         <CreatorCard key={u.id} user={u} />
       ))}
     </div>
+  )
+}
+
+// Pager: navegação prev/next com indicador "Página X de Y". Setas
+// ficam desabilitadas nos extremos. Cliquezinho no botão move o
+// state, useEffect re-fetch automático.
+function Pager({
+  page,
+  totalPages,
+  onChange,
+}: {
+  page: number
+  totalPages: number
+  onChange: (p: number) => void
+}) {
+  const canPrev = page > 1
+  const canNext = page < totalPages
+  return (
+    <nav
+      aria-label="Paginação dos criadores"
+      className="bg-parchment border-4 border-ink shadow-pixel px-4 py-3 flex items-center justify-between gap-3"
+    >
+      <button
+        type="button"
+        onClick={() => canPrev && onChange(page - 1)}
+        disabled={!canPrev}
+        className="
+          bg-ink text-parchment border-4 border-ink shadow-pixel
+          px-3 py-2 text-xs font-bold uppercase tracking-widest
+          transition-all duration-75 ease-out
+          hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none
+          disabled:opacity-40 disabled:cursor-not-allowed
+          disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-pixel
+        "
+      >
+        ◀ Anterior
+      </button>
+      <p className="text-xs uppercase tracking-widest text-ink/70 font-bold">
+        Página {page} de {totalPages}
+      </p>
+      <button
+        type="button"
+        onClick={() => canNext && onChange(page + 1)}
+        disabled={!canNext}
+        className="
+          bg-ink text-parchment border-4 border-ink shadow-pixel
+          px-3 py-2 text-xs font-bold uppercase tracking-widest
+          transition-all duration-75 ease-out
+          hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none
+          disabled:opacity-40 disabled:cursor-not-allowed
+          disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-pixel
+        "
+      >
+        Próxima ▶
+      </button>
+    </nav>
   )
 }
 

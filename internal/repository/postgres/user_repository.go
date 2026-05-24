@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/manoIvans/lojinha-assets/internal/domain"
+	"github.com/manoIvans/manomesh/internal/domain"
 )
 
 // pgUniqueViolation é o SQLSTATE retornado pelo Postgres quando uma
@@ -168,6 +168,56 @@ func (r *UserRepository) ListWithAssetCount(ctx context.Context, limit int) ([]*
 		return nil, fmt.Errorf("iterate users: %w", err)
 	}
 	return out, nil
+}
+
+// ListWithAssetCountPaginated devolve uma página da listagem do
+// diretório /criadores. Mesma ordenação do ListWithAssetCount (assets
+// DESC, depois display_name) + LIMIT/OFFSET. COUNT(*) sobre users
+// devolve o total geral.
+//
+// page/pageSize já validados pelo handler. Offset = (page-1)*pageSize.
+func (r *UserRepository) ListWithAssetCountPaginated(ctx context.Context, page, pageSize int) ([]*domain.PublicUser, int64, error) {
+	offset := (page - 1) * pageSize
+
+	const listQ = `
+		SELECT u.id, u.username, u.display_name, u.bio, u.avatar_path,
+		       u.created_at,
+		       COUNT(a.id) AS asset_count
+		  FROM users u
+		  LEFT JOIN assets a ON a.owner_id = u.id
+		 GROUP BY u.id
+		 ORDER BY asset_count DESC, u.display_name ASC
+		 LIMIT $1 OFFSET $2`
+
+	rows, err := r.db.Query(ctx, listQ, pageSize, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("select users page: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]*domain.PublicUser, 0, pageSize)
+	for rows.Next() {
+		u := &domain.PublicUser{}
+		var count int64
+		if err := rows.Scan(
+			&u.ID, &u.Username, &u.DisplayName, &u.Bio, &u.AvatarPath,
+			&u.CreatedAt, &count,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan user page row: %w", err)
+		}
+		u.AssetCount = &count
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate users page: %w", err)
+	}
+
+	var total int64
+	if err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count users: %w", err)
+	}
+
+	return out, total, nil
 }
 
 // FindByUsername alimenta a página pública /u/:username. Username

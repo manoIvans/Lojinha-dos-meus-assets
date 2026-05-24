@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/manoIvans/lojinha-assets/internal/domain"
+	"github.com/manoIvans/manomesh/internal/domain"
 )
 
 // FavoriteRepository encapsula a tabela `favorites`. Tabela

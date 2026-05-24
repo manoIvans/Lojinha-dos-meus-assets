@@ -8,7 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/manoIvans/lojinha-assets/internal/domain"
+	"github.com/manoIvans/manomesh/internal/domain"
 )
 
 // cartRepository é a interface mínima que o CartHandler usa.
@@ -21,9 +21,15 @@ type cartRepository interface {
 }
 
 // purchaseRepository é a interface mínima usada pelo CartHandler
-// (no Checkout) e pelo handler de biblioteca (List/Ids).
+// (Checkout / Confirm) e pelo handler de biblioteca (List/Ids).
+//
+// Checkout cria sessão + purchases pending. ConfirmSession marca pago
+// e devolve `alreadyPaid` pra que o handler decida se dispara
+// notificações (só na PRIMEIRA confirmação, nunca em retry idempotente).
 type purchaseRepository interface {
-	Checkout(ctx context.Context, userID int64) ([]int64, error)
+	Checkout(ctx context.Context, userID int64) (*domain.CheckoutSession, error)
+	FindSession(ctx context.Context, sessionID string, userID int64) (*domain.CheckoutSession, error)
+	ConfirmSession(ctx context.Context, sessionID string, userID int64) (session *domain.CheckoutSession, alreadyPaid bool, err error)
 	ListByUser(ctx context.Context, userID int64) ([]*domain.Purchase, error)
 	ListPurchasedIDsByUser(ctx context.Context, userID int64) ([]int64, error)
 	SellerStats(ctx context.Context, sellerID int64, recentLimit int) (*domain.SellerStats, error)
@@ -31,8 +37,13 @@ type purchaseRepository interface {
 
 // notificationSink: dependência opcional do CartHandler.
 // Best-effort: falha não bloqueia o checkout.
+//
+// Dois fluxos dispararam pós-Checkout: avisar cada VENDEDOR
+// (asset_sold) e avisar o COMPRADOR uma vez por asset
+// (purchase_confirmation).
 type notificationSink interface {
 	CreateForSoldAssets(ctx context.Context, buyerID int64, purchaseIDs []int64) error
+	CreateForBuyerPurchases(ctx context.Context, buyerID int64, purchaseIDs []int64) error
 }
 
 type CartHandler struct {
@@ -136,19 +147,22 @@ func (h *CartHandler) ListIDs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ids": ids})
 }
 
-// Checkout dispara a "compra" de tudo que está no carrinho. Sem
-// gateway de pagamento — é um stub que cria os Purchases e limpa
-// o carrinho atomicamente.
+// Checkout abre uma checkout_session em estado 'pending' com as
+// purchases vinculadas. NÃO marca como paga ainda — esse é o passo
+// que o provedor de pagamento (Stripe/MercadoPago) faria via webhook.
 //
-// Devolve os IDs dos purchases criados pra que o front possa
-// (no futuro) abrir a tela de detalhe ou mostrar contagem.
+// No modo stub, o frontend recebe a sessão, "redireciona" pra uma
+// página simulando o provedor, e chama POST /my/checkout/sessions/:id/confirm
+// quando o usuário clica em "Pagar". Notificações disparam APENAS lá.
+//
+// Devolve a CheckoutSession completa (com purchase_ids), 201 Created.
 func (h *CartHandler) Checkout(c *gin.Context) {
 	userID, ok := userIDFromContext(c)
 	if !ok {
 		return
 	}
 
-	ids, err := h.purchases.Checkout(c.Request.Context(), userID)
+	session, err := h.purchases.Checkout(c.Request.Context(), userID)
 	if err != nil {
 		switch {
 		case errors.Is(err, domain.ErrCartEmpty):
@@ -163,15 +177,82 @@ func (h *CartHandler) Checkout(c *gin.Context) {
 		return
 	}
 
-	// Notificações best-effort: vendedor é notificado pra cada asset
-	// vendido. Falha NÃO bloqueia o checkout (compra já está commitada);
-	// só logamos pra debug. Quando virar feature crítica, mover pra
-	// dentro da transação do Checkout no repository.
-	if err := h.notifications.CreateForSoldAssets(c.Request.Context(), userID, ids); err != nil {
-		log.Printf("notify sellers: %v", err)
+	c.JSON(http.StatusCreated, session)
+}
+
+// GetCheckoutSession devolve a sessão pelo ID (path :id). Usada pela
+// página stub do provedor pra mostrar total + lista de compras antes
+// do usuário confirmar. Ownership conferida no repo (404 quando user != dono).
+func (h *CartHandler) GetCheckoutSession(c *gin.Context) {
+	userID, ok := userIDFromContext(c)
+	if !ok {
+		return
+	}
+	sessionID := c.Param("id")
+
+	session, err := h.purchases.FindSession(c.Request.Context(), sessionID, userID)
+	if err != nil {
+		if errors.Is(err, domain.ErrSessionNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "sessão não encontrada"})
+			return
+		}
+		serverError(c, "get checkout session", err, "falha ao buscar sessão")
+		return
+	}
+	c.JSON(http.StatusOK, session)
+}
+
+// ConfirmCheckoutSession marca a sessão como paga e dispara notificações.
+// Idempotente: chamar 2x não duplica notificações (alreadyPaid=true no
+// 2º call, e a gente skipa o hook).
+//
+// Esse endpoint substitui o webhook real (Stripe/MercadoPago) no modo
+// stub — quando vier o gateway de verdade, a chamada externa chega
+// no /webhooks/stripe e roteia pra cá com mesma lógica.
+//
+// Erros mapeados:
+//
+//	404 ErrSessionNotFound  — id inválido OU outro dono
+//	410 ErrSessionExpired   — passou de 30min
+//	409 ErrSessionInvalidState — já failed/expired no DB
+//	409 ErrAlreadyPurchased — race: comprou via outra sessão entre o
+//	                          Checkout e este Confirm
+func (h *CartHandler) ConfirmCheckoutSession(c *gin.Context) {
+	userID, ok := userIDFromContext(c)
+	if !ok {
+		return
+	}
+	sessionID := c.Param("id")
+
+	session, alreadyPaid, err := h.purchases.ConfirmSession(c.Request.Context(), sessionID, userID)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrSessionNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "sessão não encontrada"})
+		case errors.Is(err, domain.ErrSessionExpired):
+			c.JSON(http.StatusGone, gin.H{"error": "sessão expirada"})
+		case errors.Is(err, domain.ErrSessionInvalidState):
+			c.JSON(http.StatusConflict, gin.H{"error": "sessão em estado inválido"})
+		case errors.Is(err, domain.ErrAlreadyPurchased):
+			c.JSON(http.StatusConflict, gin.H{"error": "asset já comprado em outra sessão"})
+		default:
+			serverError(c, "confirm session", err, "falha ao confirmar pagamento")
+		}
+		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"purchase_ids": ids})
+	// Dispara notificações APENAS na primeira confirmação. Webhook real
+	// pode retry o request — alreadyPaid sinaliza idempotência.
+	if !alreadyPaid {
+		if err := h.notifications.CreateForSoldAssets(c.Request.Context(), userID, session.PurchaseIDs); err != nil {
+			log.Printf("notify sellers: %v", err)
+		}
+		if err := h.notifications.CreateForBuyerPurchases(c.Request.Context(), userID, session.PurchaseIDs); err != nil {
+			log.Printf("notify buyer: %v", err)
+		}
+	}
+
+	c.JSON(http.StatusOK, session)
 }
 
 // Library lista as compras do usuário. Cada item é um Purchase com

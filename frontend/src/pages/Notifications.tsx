@@ -231,6 +231,14 @@ function NotificationText({ notif }: { notif: Notification }) {
           {actor} avaliou {asset}.
         </p>
       )
+    case 'purchase_confirmation':
+      // Você comprou {asset} de {actor}. Aqui o actor é o VENDEDOR
+      // (dono do asset), não quem fez a ação — frase reflete isso.
+      return (
+        <p>
+          Você comprou {asset} de {actor}.
+        </p>
+      )
     default:
       return <p>Notificação desconhecida.</p>
   }

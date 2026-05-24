@@ -8,11 +8,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/manoIvans/lojinha-assets/internal/auth"
-	"github.com/manoIvans/lojinha-assets/internal/repository/postgres"
-	"github.com/manoIvans/lojinha-assets/internal/storage"
-	"github.com/manoIvans/lojinha-assets/internal/transport/http/handler"
-	"github.com/manoIvans/lojinha-assets/internal/transport/http/middleware"
+	"github.com/manoIvans/manomesh/internal/auth"
+	"github.com/manoIvans/manomesh/internal/repository/postgres"
+	"github.com/manoIvans/manomesh/internal/storage"
+	"github.com/manoIvans/manomesh/internal/transport/http/handler"
+	"github.com/manoIvans/manomesh/internal/transport/http/middleware"
 )
 
 // NewRouter monta o roteador Gin com todas as rotas e middlewares
@@ -166,6 +166,13 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStor
 			protected.GET("/my/cart-ids", cartHandler.ListIDs)
 			protected.DELETE("/my/cart", cartHandler.Clear)
 			protected.POST("/my/cart/checkout", cartHandler.Checkout)
+			// Checkout abre uma session 'pending'. Stub do provedor de
+			// pagamento (Stripe/MercadoPago) é simulado pelo frontend:
+			// GET pega o detalhe da sessão, POST /confirm marca como
+			// pago + dispara notificações. Idempotente — webhook real
+			// pode retry o request sem duplicar nada.
+			protected.GET("/my/checkout/sessions/:id", cartHandler.GetCheckoutSession)
+			protected.POST("/my/checkout/sessions/:id/confirm", cartHandler.ConfirmCheckoutSession)
 			protected.GET("/my/library", cartHandler.Library)
 			protected.GET("/my/library-ids", cartHandler.LibraryIDs)
 

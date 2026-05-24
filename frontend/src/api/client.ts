@@ -80,7 +80,7 @@ export type PublicUser = {
 export type Notification = {
   id: number
   user_id: number
-  type: 'asset_sold' | 'asset_reviewed'
+  type: 'asset_sold' | 'asset_reviewed' | 'purchase_confirmation'
   asset_id?: number | null
   actor_user_id?: number | null
   read_at?: string | null
@@ -145,6 +145,11 @@ export type ReviewSummary = {
   count: number
 }
 
+// PurchaseStatus rastreia o estado do pagamento. 'pending' durante a
+// sessão de checkout, 'paid' depois que o provedor confirma. Library
+// só mostra 'paid' — pending/failed não contam.
+export type PurchaseStatus = 'pending' | 'paid' | 'failed' | 'refunded'
+
 // Purchase é o registro IMUTÁVEL de uma compra. price_cents_snapshot
 // preserva o preço pago — não muda mesmo que o vendedor reajuste o
 // preço do asset depois. `asset` é nullable: se o vendedor deletou,
@@ -152,9 +157,31 @@ export type ReviewSummary = {
 export type Purchase = {
   id: number
   user_id: number
+  status: PurchaseStatus
   price_cents_snapshot: number
   purchased_at: string
   asset?: Asset | null
+}
+
+// CheckoutSessionStatus espelha o que o backend grava em
+// checkout_sessions.status. 'pending' até confirmação, 'paid' após.
+export type CheckoutSessionStatus = 'pending' | 'paid' | 'failed' | 'expired'
+
+// CheckoutSession é a "tentativa de pagamento" — em provedor real
+// equivale a um Stripe PaymentIntent ou MercadoPago Preference. No
+// stub atual, é uma row interna; o frontend "redireciona" pra uma
+// página simulando o provedor e chama o endpoint de confirm.
+export type CheckoutSession = {
+  id: string
+  user_id: number
+  status: CheckoutSessionStatus
+  provider: string
+  provider_session_id?: string | null
+  total_cents: number
+  created_at: string
+  expires_at: string
+  paid_at?: string | null
+  purchase_ids?: number[]
 }
 
 export type Asset = {

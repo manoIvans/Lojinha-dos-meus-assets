@@ -4,15 +4,17 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/manoIvans/lojinha-assets/internal/domain"
+	"github.com/manoIvans/manomesh/internal/domain"
 )
 
 // Testes do CartHandler. Foco no Add (mapeamento de erros sentinel:
-// 404 not found, 409 self-purchase) e no Checkout (hook de
-// notificação dispara após sucesso).
+// 404 not found, 409 self-purchase), no Checkout (cria sessão pending,
+// NÃO dispara notificações ainda) e no Confirm (marca pago + dispara
+// notificações; idempotente).
 
 func setupCart(
 	t *testing.T,
@@ -29,6 +31,8 @@ func setupCart(
 	eng := newTestEngine(t)
 	eng.POST("/assets/:id/cart", withAuthUser(authedUserID), h.Add)
 	eng.POST("/my/cart/checkout", withAuthUser(authedUserID), h.Checkout)
+	eng.GET("/my/checkout/sessions/:id", withAuthUser(authedUserID), h.GetCheckoutSession)
+	eng.POST("/my/checkout/sessions/:id/confirm", withAuthUser(authedUserID), h.ConfirmCheckoutSession)
 	return eng, notifs
 }
 
@@ -78,39 +82,43 @@ func TestCartAdd_SelfPurchase(t *testing.T) {
 }
 
 // ============================================================
-// Checkout
+// Checkout (cria session pending — não dispara notificações)
 // ============================================================
 
-func TestCartCheckout_Success_TriggersNotifications(t *testing.T) {
-	// Checkout retorna 2 purchase IDs — verificamos:
-	//   1. Status 201 + payload com ids
-	//   2. Hook de notificação foi chamado com os mesmos IDs e
-	//      o buyerID correto
+func TestCartCheckout_Success_CreatesPendingSession(t *testing.T) {
 	purchases := &fakePurchaseRepo{
-		CheckoutFn: func(_ context.Context, userID int64) ([]int64, error) {
+		CheckoutFn: func(_ context.Context, userID int64) (*domain.CheckoutSession, error) {
 			if userID != 99 {
 				t.Errorf("checkout: want userID=99, got %d", userID)
 			}
-			return []int64{101, 102}, nil
+			return &domain.CheckoutSession{
+				ID:          "sess-abc",
+				UserID:      userID,
+				Status:      domain.SessionPending,
+				Provider:    "stub",
+				TotalCents:  3000,
+				CreatedAt:   time.Now(),
+				ExpiresAt:   time.Now().Add(30 * time.Minute),
+				PurchaseIDs: []int64{101, 102},
+			}, nil
 		},
 	}
 	eng, notifs := setupCart(t, &fakeCartRepo{}, purchases, nil, 99)
 
 	w := doJSON(t, eng, http.MethodPost, "/my/cart/checkout", nil, "")
 	assertStatus(t, w, http.StatusCreated)
+	assertJSONString(t, w, "id", "sess-abc")
+	assertJSONString(t, w, "status", "pending")
 
-	if len(notifs.SoldAssetsCalls) != 1 {
-		t.Fatalf("notificação de venda deveria ter sido chamada 1x, got %d", len(notifs.SoldAssetsCalls))
-	}
-	got := notifs.SoldAssetsCalls[0]
-	if len(got) != 2 || got[0] != 101 || got[1] != 102 {
-		t.Errorf("purchase IDs no notificador: want [101 102], got %v", got)
+	// Notificações NÃO devem disparar aqui — só no Confirm.
+	if len(notifs.SoldAssetsCalls) != 0 || len(notifs.BuyerPurchasesCalls) != 0 {
+		t.Errorf("notificações não deveriam disparar no Checkout (pending)")
 	}
 }
 
 func TestCartCheckout_Empty(t *testing.T) {
 	purchases := &fakePurchaseRepo{
-		CheckoutFn: func(_ context.Context, _ int64) ([]int64, error) {
+		CheckoutFn: func(_ context.Context, _ int64) (*domain.CheckoutSession, error) {
 			return nil, domain.ErrCartEmpty
 		},
 	}
@@ -120,7 +128,6 @@ func TestCartCheckout_Empty(t *testing.T) {
 	assertStatus(t, w, http.StatusBadRequest)
 	assertJSONString(t, w, "error", "carrinho vazio")
 
-	// Sem compra, sem notificação.
 	if len(notifs.SoldAssetsCalls) != 0 {
 		t.Errorf("notificação não deveria disparar com carrinho vazio")
 	}
@@ -128,7 +135,7 @@ func TestCartCheckout_Empty(t *testing.T) {
 
 func TestCartCheckout_AlreadyPurchased(t *testing.T) {
 	purchases := &fakePurchaseRepo{
-		CheckoutFn: func(_ context.Context, _ int64) ([]int64, error) {
+		CheckoutFn: func(_ context.Context, _ int64) (*domain.CheckoutSession, error) {
 			return nil, domain.ErrAlreadyPurchased
 		},
 	}
@@ -136,4 +143,120 @@ func TestCartCheckout_AlreadyPurchased(t *testing.T) {
 
 	w := doJSON(t, eng, http.MethodPost, "/my/cart/checkout", nil, "")
 	assertStatus(t, w, http.StatusConflict)
+}
+
+// ============================================================
+// GetCheckoutSession
+// ============================================================
+
+func TestGetCheckoutSession_Success(t *testing.T) {
+	purchases := &fakePurchaseRepo{
+		FindSessionFn: func(_ context.Context, sessionID string, userID int64) (*domain.CheckoutSession, error) {
+			if sessionID != "sess-abc" || userID != 10 {
+				t.Errorf("args: want sess-abc/10, got %s/%d", sessionID, userID)
+			}
+			return &domain.CheckoutSession{
+				ID:     "sess-abc",
+				UserID: userID,
+				Status: domain.SessionPending,
+			}, nil
+		},
+	}
+	eng, _ := setupCart(t, &fakeCartRepo{}, purchases, nil, 10)
+	w := doJSON(t, eng, http.MethodGet, "/my/checkout/sessions/sess-abc", nil, "")
+	assertStatus(t, w, http.StatusOK)
+	assertJSONString(t, w, "id", "sess-abc")
+}
+
+func TestGetCheckoutSession_NotFound(t *testing.T) {
+	purchases := &fakePurchaseRepo{
+		FindSessionFn: func(_ context.Context, _ string, _ int64) (*domain.CheckoutSession, error) {
+			return nil, domain.ErrSessionNotFound
+		},
+	}
+	eng, _ := setupCart(t, &fakeCartRepo{}, purchases, nil, 10)
+	w := doJSON(t, eng, http.MethodGet, "/my/checkout/sessions/qualquer", nil, "")
+	assertStatus(t, w, http.StatusNotFound)
+}
+
+// ============================================================
+// ConfirmCheckoutSession (paga + dispara notificações; idempotente)
+// ============================================================
+
+func TestConfirmSession_Success_TriggersNotifications(t *testing.T) {
+	purchases := &fakePurchaseRepo{
+		ConfirmSessionFn: func(_ context.Context, sessionID string, userID int64) (*domain.CheckoutSession, bool, error) {
+			if sessionID != "sess-abc" || userID != 99 {
+				t.Errorf("args: want sess-abc/99, got %s/%d", sessionID, userID)
+			}
+			return &domain.CheckoutSession{
+				ID:          sessionID,
+				UserID:      userID,
+				Status:      domain.SessionPaid,
+				PurchaseIDs: []int64{101, 102},
+			}, false, nil
+		},
+	}
+	eng, notifs := setupCart(t, &fakeCartRepo{}, purchases, nil, 99)
+
+	w := doJSON(t, eng, http.MethodPost, "/my/checkout/sessions/sess-abc/confirm", nil, "")
+	assertStatus(t, w, http.StatusOK)
+	assertJSONString(t, w, "status", "paid")
+
+	if len(notifs.SoldAssetsCalls) != 1 || len(notifs.BuyerPurchasesCalls) != 1 {
+		t.Fatalf("notificações deveriam ter disparado 1x cada (sold=%d, buyer=%d)",
+			len(notifs.SoldAssetsCalls), len(notifs.BuyerPurchasesCalls))
+	}
+	if got := notifs.SoldAssetsCalls[0]; len(got) != 2 || got[0] != 101 || got[1] != 102 {
+		t.Errorf("purchase IDs no notificador: want [101 102], got %v", got)
+	}
+}
+
+func TestConfirmSession_Idempotent_DoesNotRefireNotifications(t *testing.T) {
+	// alreadyPaid=true → handler NÃO deve disparar notifs (webhook retry).
+	purchases := &fakePurchaseRepo{
+		ConfirmSessionFn: func(_ context.Context, sessionID string, userID int64) (*domain.CheckoutSession, bool, error) {
+			return &domain.CheckoutSession{
+				ID:          sessionID,
+				UserID:      userID,
+				Status:      domain.SessionPaid,
+				PurchaseIDs: []int64{101},
+			}, true, nil
+		},
+	}
+	eng, notifs := setupCart(t, &fakeCartRepo{}, purchases, nil, 99)
+
+	w := doJSON(t, eng, http.MethodPost, "/my/checkout/sessions/sess-abc/confirm", nil, "")
+	assertStatus(t, w, http.StatusOK)
+
+	if len(notifs.SoldAssetsCalls) != 0 || len(notifs.BuyerPurchasesCalls) != 0 {
+		t.Errorf("notificações NÃO deveriam disparar em retry idempotente")
+	}
+}
+
+func TestConfirmSession_Expired(t *testing.T) {
+	purchases := &fakePurchaseRepo{
+		ConfirmSessionFn: func(_ context.Context, _ string, _ int64) (*domain.CheckoutSession, bool, error) {
+			return nil, false, domain.ErrSessionExpired
+		},
+	}
+	eng, notifs := setupCart(t, &fakeCartRepo{}, purchases, nil, 99)
+
+	w := doJSON(t, eng, http.MethodPost, "/my/checkout/sessions/sess-old/confirm", nil, "")
+	assertStatus(t, w, http.StatusGone)
+
+	if len(notifs.SoldAssetsCalls) != 0 {
+		t.Errorf("notificações NÃO deveriam disparar em sessão expirada")
+	}
+}
+
+func TestConfirmSession_NotFound(t *testing.T) {
+	purchases := &fakePurchaseRepo{
+		ConfirmSessionFn: func(_ context.Context, _ string, _ int64) (*domain.CheckoutSession, bool, error) {
+			return nil, false, domain.ErrSessionNotFound
+		},
+	}
+	eng, _ := setupCart(t, &fakeCartRepo{}, purchases, nil, 99)
+	w := doJSON(t, eng, http.MethodPost, "/my/checkout/sessions/inexistente/confirm", nil, "")
+	assertStatus(t, w, http.StatusNotFound)
 }

@@ -12,8 +12,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/manoIvans/lojinha-assets/internal/domain"
-	"github.com/manoIvans/lojinha-assets/internal/transport/http/middleware"
+	"github.com/manoIvans/manomesh/internal/domain"
+	"github.com/manoIvans/manomesh/internal/transport/http/middleware"
 )
 
 // Setup helpers + mocks de TODAS as interfaces que os handlers
@@ -209,17 +209,31 @@ func (f *fakeCartRepo) ListIDsByUser(ctx context.Context, userID int64) ([]int64
 // ============================================================
 
 type fakePurchaseRepo struct {
-	CheckoutFn    func(ctx context.Context, userID int64) ([]int64, error)
-	ListFn        func(ctx context.Context, userID int64) ([]*domain.Purchase, error)
-	ListIDsFn     func(ctx context.Context, userID int64) ([]int64, error)
-	SellerStatsFn func(ctx context.Context, sellerID int64, recentLimit int) (*domain.SellerStats, error)
+	CheckoutFn       func(ctx context.Context, userID int64) (*domain.CheckoutSession, error)
+	FindSessionFn    func(ctx context.Context, sessionID string, userID int64) (*domain.CheckoutSession, error)
+	ConfirmSessionFn func(ctx context.Context, sessionID string, userID int64) (*domain.CheckoutSession, bool, error)
+	ListFn           func(ctx context.Context, userID int64) ([]*domain.Purchase, error)
+	ListIDsFn        func(ctx context.Context, userID int64) ([]int64, error)
+	SellerStatsFn    func(ctx context.Context, sellerID int64, recentLimit int) (*domain.SellerStats, error)
 }
 
-func (f *fakePurchaseRepo) Checkout(ctx context.Context, userID int64) ([]int64, error) {
+func (f *fakePurchaseRepo) Checkout(ctx context.Context, userID int64) (*domain.CheckoutSession, error) {
 	if f.CheckoutFn == nil {
 		panic("fakePurchaseRepo.Checkout chamado sem mock configurado")
 	}
 	return f.CheckoutFn(ctx, userID)
+}
+func (f *fakePurchaseRepo) FindSession(ctx context.Context, sessionID string, userID int64) (*domain.CheckoutSession, error) {
+	if f.FindSessionFn == nil {
+		panic("fakePurchaseRepo.FindSession chamado sem mock configurado")
+	}
+	return f.FindSessionFn(ctx, sessionID, userID)
+}
+func (f *fakePurchaseRepo) ConfirmSession(ctx context.Context, sessionID string, userID int64) (*domain.CheckoutSession, bool, error) {
+	if f.ConfirmSessionFn == nil {
+		panic("fakePurchaseRepo.ConfirmSession chamado sem mock configurado")
+	}
+	return f.ConfirmSessionFn(ctx, sessionID, userID)
 }
 func (f *fakePurchaseRepo) ListByUser(ctx context.Context, userID int64) ([]*domain.Purchase, error) {
 	if f.ListFn == nil {
@@ -241,18 +255,27 @@ func (f *fakePurchaseRepo) SellerStats(ctx context.Context, sellerID int64, rece
 }
 
 // fakeNotificationSink: registra cada chamada pra que o teste
-// possa verificar que o hook foi disparado pós-Checkout.
+// possa verificar que os hooks foram disparados pós-Checkout/Review.
 type fakeNotificationSink struct {
-	SoldAssetsFn       func(ctx context.Context, buyerID int64, purchaseIDs []int64) error
-	ForReviewFn        func(ctx context.Context, reviewerID, assetID int64) error
-	SoldAssetsCalls    [][]int64 // captura purchaseIDs
-	ForReviewCalls     [][2]int64
+	SoldAssetsFn         func(ctx context.Context, buyerID int64, purchaseIDs []int64) error
+	BuyerPurchasesFn     func(ctx context.Context, buyerID int64, purchaseIDs []int64) error
+	ForReviewFn          func(ctx context.Context, reviewerID, assetID int64) error
+	SoldAssetsCalls      [][]int64 // captura purchaseIDs do hook do vendedor
+	BuyerPurchasesCalls  [][]int64 // captura purchaseIDs do hook do comprador
+	ForReviewCalls       [][2]int64
 }
 
 func (f *fakeNotificationSink) CreateForSoldAssets(ctx context.Context, buyerID int64, purchaseIDs []int64) error {
 	f.SoldAssetsCalls = append(f.SoldAssetsCalls, purchaseIDs)
 	if f.SoldAssetsFn != nil {
 		return f.SoldAssetsFn(ctx, buyerID, purchaseIDs)
+	}
+	return nil
+}
+func (f *fakeNotificationSink) CreateForBuyerPurchases(ctx context.Context, buyerID int64, purchaseIDs []int64) error {
+	f.BuyerPurchasesCalls = append(f.BuyerPurchasesCalls, purchaseIDs)
+	if f.BuyerPurchasesFn != nil {
+		return f.BuyerPurchasesFn(ctx, buyerID, purchaseIDs)
 	}
 	return nil
 }
@@ -272,6 +295,7 @@ type fakeAssetRepo struct {
 	CreateFn          func(ctx context.Context, ownerID int64, title, description string, tags []string, priceCents int64, thumbnailPath, modelPath string) (*domain.Asset, error)
 	FindByIDFn        func(ctx context.Context, id int64) (*domain.Asset, error)
 	ListFn            func(ctx context.Context) ([]*domain.Asset, error)
+	ListPaginatedFn   func(ctx context.Context, page, pageSize int) ([]*domain.Asset, int64, error)
 	ListByOwnerFn     func(ctx context.Context, ownerID int64) ([]*domain.Asset, error)
 	UpdateFn          func(ctx context.Context, id, ownerID int64, title, description string, tags []string, priceCents int64) (*domain.Asset, error)
 	UpdateThumbnailFn func(ctx context.Context, id, ownerID int64, newPath string) (string, error)
@@ -299,6 +323,12 @@ func (f *fakeAssetRepo) List(ctx context.Context) ([]*domain.Asset, error) {
 		panic("fakeAssetRepo.List chamado sem mock configurado")
 	}
 	return f.ListFn(ctx)
+}
+func (f *fakeAssetRepo) ListPaginated(ctx context.Context, page, pageSize int) ([]*domain.Asset, int64, error) {
+	if f.ListPaginatedFn == nil {
+		panic("fakeAssetRepo.ListPaginated chamado sem mock configurado")
+	}
+	return f.ListPaginatedFn(ctx, page, pageSize)
 }
 func (f *fakeAssetRepo) ListByOwner(ctx context.Context, ownerID int64) ([]*domain.Asset, error) {
 	if f.ListByOwnerFn == nil {
@@ -389,6 +419,7 @@ type fakeUserProfileRepo struct {
 	SetAvatarFn        func(ctx context.Context, id int64, newPath string) (string, error)
 	ClearAvatarFn      func(ctx context.Context, id int64) (string, error)
 	ListWithCountFn    func(ctx context.Context, limit int) ([]*domain.PublicUser, error)
+	ListWithCountPageFn func(ctx context.Context, page, pageSize int) ([]*domain.PublicUser, int64, error)
 }
 
 func (f *fakeUserProfileRepo) FindByID(ctx context.Context, id int64) (*domain.User, error) {
@@ -426,6 +457,12 @@ func (f *fakeUserProfileRepo) ListWithAssetCount(ctx context.Context, limit int)
 		panic("fakeUserProfileRepo.ListWithAssetCount chamado sem mock")
 	}
 	return f.ListWithCountFn(ctx, limit)
+}
+func (f *fakeUserProfileRepo) ListWithAssetCountPaginated(ctx context.Context, page, pageSize int) ([]*domain.PublicUser, int64, error) {
+	if f.ListWithCountPageFn == nil {
+		panic("fakeUserProfileRepo.ListWithAssetCountPaginated chamado sem mock")
+	}
+	return f.ListWithCountPageFn(ctx, page, pageSize)
 }
 
 // avatarStorage do UserHandler — minimal subset do fileStorage.

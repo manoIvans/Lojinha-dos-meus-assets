@@ -6,7 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/manoIvans/lojinha-assets/internal/domain"
+	"github.com/manoIvans/manomesh/internal/domain"
 )
 
 type NotificationRepository struct {
@@ -36,6 +36,28 @@ func (r *NotificationRepository) CreateForSoldAssets(ctx context.Context, buyerI
 		 WHERE p.id = ANY($2)`
 	if _, err := r.db.Exec(ctx, q, buyerID, purchaseIDs); err != nil {
 		return fmt.Errorf("create asset_sold notifications: %w", err)
+	}
+	return nil
+}
+
+// CreateForBuyerPurchases cria uma notificação `purchase_confirmation`
+// pro COMPRADOR, uma por asset comprado. Espelha CreateForSoldAssets
+// mas com user_id = buyer e actor_user_id = seller (o dono do asset).
+//
+// Same atomic INSERT...SELECT pattern, mesmo best-effort: chamado
+// pós-Checkout, falha aqui não bloqueia a compra.
+func (r *NotificationRepository) CreateForBuyerPurchases(ctx context.Context, buyerID int64, purchaseIDs []int64) error {
+	if len(purchaseIDs) == 0 {
+		return nil
+	}
+	const q = `
+		INSERT INTO notifications (user_id, type, asset_id, actor_user_id)
+		SELECT $1, 'purchase_confirmation', p.asset_id, a.owner_id
+		  FROM purchases p
+		  JOIN assets a ON a.id = p.asset_id
+		 WHERE p.id = ANY($2)`
+	if _, err := r.db.Exec(ctx, q, buyerID, purchaseIDs); err != nil {
+		return fmt.Errorf("create purchase_confirmation notifications: %w", err)
 	}
 	return nil
 }

@@ -1,6 +1,12 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ApiError, api, fileUrl, type Asset } from '../api/client'
+import {
+  ApiError,
+  api,
+  fileUrl,
+  type Asset,
+  type CheckoutSession,
+} from '../api/client'
 import { useCart } from '../cart/CartContext'
 import { formatPrice } from '../lib/format'
 import Avatar from '../components/Avatar'
@@ -71,14 +77,17 @@ export default function Cart() {
     if (!visible || visible.length === 0) return
     setCheckingOut(true)
     try {
-      const resp = await api.post<{ purchase_ids: number[] }>(
+      // Backend cria a sessão pending e esvazia o carrinho. O fluxo de
+      // pagamento real (Stripe/MP) faria redirect pra página externa;
+      // no stub, mandamos pro /checkout/:id (página interna que
+      // simula o provedor).
+      const session = await api.post<CheckoutSession>(
         '/api/v1/my/cart/checkout',
       )
-      // markPurchased esvazia carrinho e adiciona ao "comprado".
-      const purchasedAssetIDs = visible.map((a) => a.id)
-      markPurchased(purchasedAssetIDs)
-      toast.success(`${resp.purchase_ids.length} compra(s) realizada(s)`)
-      navigate('/library', { replace: true })
+      // Carrinho já foi esvaziado no backend; reflete localmente pra
+      // que badge/contexto não fiquem stale.
+      markPurchased(visible.map((a) => a.id))
+      navigate(`/checkout/${session.id}`, { replace: true })
     } catch (err) {
       toast.error(messageForCheckout(err))
       setCheckingOut(false)

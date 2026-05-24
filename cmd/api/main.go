@@ -9,12 +9,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/manoIvans/lojinha-assets/internal/auth"
-	"github.com/manoIvans/lojinha-assets/internal/config"
-	"github.com/manoIvans/lojinha-assets/internal/migrate"
-	"github.com/manoIvans/lojinha-assets/internal/repository/postgres"
-	"github.com/manoIvans/lojinha-assets/internal/storage"
-	httptransport "github.com/manoIvans/lojinha-assets/internal/transport/http"
+	"github.com/manoIvans/manomesh/internal/auth"
+	"github.com/manoIvans/manomesh/internal/config"
+	"github.com/manoIvans/manomesh/internal/migrate"
+	"github.com/manoIvans/manomesh/internal/repository/postgres"
+	"github.com/manoIvans/manomesh/internal/storage"
+	httptransport "github.com/manoIvans/manomesh/internal/transport/http"
 )
 
 func main() {

@@ -12,9 +12,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/manoIvans/lojinha-assets/internal/domain"
-	"github.com/manoIvans/lojinha-assets/internal/storage"
-	"github.com/manoIvans/lojinha-assets/internal/transport/http/middleware"
+	"github.com/manoIvans/manomesh/internal/domain"
+	"github.com/manoIvans/manomesh/internal/storage"
+	"github.com/manoIvans/manomesh/internal/transport/http/middleware"
 )
 
 // assetRepository é a interface mínima de que o AssetHandler precisa.
@@ -25,6 +25,7 @@ type assetRepository interface {
 	Create(ctx context.Context, ownerID int64, title, description string, tags []string, priceCents int64, thumbnailPath, modelPath string) (*domain.Asset, error)
 	FindByID(ctx context.Context, id int64) (*domain.Asset, error)
 	List(ctx context.Context) ([]*domain.Asset, error)
+	ListPaginated(ctx context.Context, page, pageSize int) ([]*domain.Asset, int64, error)
 	ListByOwner(ctx context.Context, ownerID int64) ([]*domain.Asset, error)
 	Update(ctx context.Context, id, ownerID int64, title, description string, tags []string, priceCents int64) (*domain.Asset, error)
 	// UpdateThumbnail e UpdateModel trocam o arquivo físico do asset
@@ -280,16 +281,36 @@ func writeStorageError(c *gin.Context, err error, field string) {
 	}
 }
 
-// List é PÚBLICA — qualquer um pode ver o catálogo. Sem auth, sem
-// filtro de owner. Quando virar problema de performance ou de produto
-// (ex: rascunhos privados), introduzimos paginação e filtros aqui.
+// List é PÚBLICA — qualquer um pode ver o catálogo. Dual-mode:
+//   - Sem `?page=`: devolve array bare (compat com clientes legados,
+//     ex: Galeria que faz filtro client-side).
+//   - Com `?page=N` (+ opcional `?page_size=M`, default 20, cap 100):
+//     devolve envelope {items, page, page_size, total}.
+//
+// O envelope só aparece sob opt-in pra não quebrar nenhum caller atual.
 func (h *AssetHandler) List(c *gin.Context) {
-	assets, err := h.assets.List(c.Request.Context())
-	if err != nil {
-		serverError(c, "list assets", err, "falha ao listar assets")
+	pg, ps, asked, ok := parsePagination(c)
+	if !ok {
 		return
 	}
-	c.JSON(http.StatusOK, assets)
+	if !asked {
+		assets, err := h.assets.List(c.Request.Context())
+		if err != nil {
+			serverError(c, "list assets", err, "falha ao listar assets")
+			return
+		}
+		c.JSON(http.StatusOK, assets)
+		return
+	}
+
+	items, total, err := h.assets.ListPaginated(c.Request.Context(), pg, ps)
+	if err != nil {
+		serverError(c, "list assets page", err, "falha ao listar assets")
+		return
+	}
+	c.JSON(http.StatusOK, page[*domain.Asset]{
+		Items: items, Page: pg, PageSize: ps, Total: total,
+	})
 }
 
 // Similar é PÚBLICA: devolve até `limit` assets parecidos com o ID

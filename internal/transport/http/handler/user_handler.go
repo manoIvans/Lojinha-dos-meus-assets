@@ -11,7 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/manoIvans/lojinha-assets/internal/domain"
+	"github.com/manoIvans/manomesh/internal/domain"
 )
 
 // userProfileRepository é a interface mínima de que o UserHandler
@@ -25,6 +25,7 @@ type userProfileRepository interface {
 	SetAvatar(ctx context.Context, id int64, newPath string) (oldPath string, err error)
 	ClearAvatar(ctx context.Context, id int64) (oldPath string, err error)
 	ListWithAssetCount(ctx context.Context, limit int) ([]*domain.PublicUser, error)
+	ListWithAssetCountPaginated(ctx context.Context, page, pageSize int) ([]*domain.PublicUser, int64, error)
 }
 
 // avatarStorage abstrai o que o UserHandler precisa do storage.
@@ -83,13 +84,34 @@ func (h *UserHandler) GetMe(c *gin.Context) {
 	c.JSON(http.StatusOK, user)
 }
 
-// List devolve TODOS os usuários (PublicUser com asset_count) pra
-// alimentar o diretório /criadores. Pública porque a info é pública
-// (catálogo já expõe os autores).
+// List devolve criadores (PublicUser com asset_count) pra alimentar o
+// diretório /criadores. Pública porque a info é pública (catálogo já
+// expõe os autores).
 //
-// Aceita ?limit=N pra a sessão "Top criadores" na home pegar só
-// os primeiros (default 0 = todos). Cap em 100 contra abuse.
+// Três modos (priorizados nesta ordem):
+//  1. `?page=N` → envelope paginado {items, page, page_size, total}.
+//  2. `?limit=N` → array bare com no máximo N (compat: home "Top criadores").
+//  3. sem query → array bare com todos (compat).
+//
+// page e limit são mutuamente exclusivos na prática: se ambos vierem,
+// page vence — limit fica ignorado.
 func (h *UserHandler) List(c *gin.Context) {
+	pg, ps, asked, ok := parsePagination(c)
+	if !ok {
+		return
+	}
+	if asked {
+		items, total, err := h.users.ListWithAssetCountPaginated(c.Request.Context(), pg, ps)
+		if err != nil {
+			serverError(c, "list users page", err, "falha ao listar criadores")
+			return
+		}
+		c.JSON(http.StatusOK, page[*domain.PublicUser]{
+			Items: items, Page: pg, PageSize: ps, Total: total,
+		})
+		return
+	}
+
 	const maxLimit = 100
 	limit := 0 // 0 = sem limite no repo
 	if raw := c.Query("limit"); raw != "" {

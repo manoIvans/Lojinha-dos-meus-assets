@@ -7,7 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/manoIvans/lojinha-assets/internal/domain"
+	"github.com/manoIvans/manomesh/internal/domain"
 )
 
 // Testes do AssetHandler para os caminhos JSON/non-multipart.
@@ -252,6 +252,56 @@ func TestTags(t *testing.T) {
 	eng := setupAssets(t, repo, 0)
 	w := doJSON(t, eng, http.MethodGet, "/tags", nil, "")
 	assertStatus(t, w, http.StatusOK)
+}
+
+// ============================================================
+// List (dual-mode: legado vs ?page=)
+// ============================================================
+
+func TestAssetList_Legacy_NoPage(t *testing.T) {
+	// Sem ?page= o handler chama o List antigo (array bare).
+	called := false
+	repo := &fakeAssetRepo{
+		ListFn: func(_ context.Context) ([]*domain.Asset, error) {
+			called = true
+			return []*domain.Asset{{ID: 1, Title: "A"}}, nil
+		},
+	}
+	eng := setupAssets(t, repo, 0)
+	w := doJSON(t, eng, http.MethodGet, "/assets", nil, "")
+	assertStatus(t, w, http.StatusOK)
+	if !called {
+		t.Fatal("List legado deveria ter sido chamado sem ?page=")
+	}
+	// Body deve ser array, não envelope.
+	if w.Body.Bytes()[0] != '[' {
+		t.Errorf("body legado deveria começar com '[', got %s", w.Body.String())
+	}
+}
+
+func TestAssetList_Paginated(t *testing.T) {
+	repo := &fakeAssetRepo{
+		ListPaginatedFn: func(_ context.Context, page, pageSize int) ([]*domain.Asset, int64, error) {
+			if page != 2 || pageSize != 5 {
+				t.Errorf("page/size: want 2/5, got %d/%d", page, pageSize)
+			}
+			return []*domain.Asset{{ID: 6, Title: "F"}}, 42, nil
+		},
+	}
+	eng := setupAssets(t, repo, 0)
+	w := doJSON(t, eng, http.MethodGet, "/assets?page=2&page_size=5", nil, "")
+	assertStatus(t, w, http.StatusOK)
+	body := decodeJSON(t, w)
+	if body["page"] != float64(2) || body["page_size"] != float64(5) || body["total"] != float64(42) {
+		t.Errorf("envelope errado: %v", body)
+	}
+}
+
+func TestAssetList_InvalidPage(t *testing.T) {
+	// page=0 → 400, repo não tocado.
+	eng := setupAssets(t, &fakeAssetRepo{}, 0)
+	w := doJSON(t, eng, http.MethodGet, "/assets?page=0", nil, "")
+	assertStatus(t, w, http.StatusBadRequest)
 }
 
 func TestMyAssets(t *testing.T) {

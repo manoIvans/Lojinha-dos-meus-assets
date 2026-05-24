@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/manoIvans/lojinha-assets/internal/domain"
+	"github.com/manoIvans/manomesh/internal/domain"
 )
 
 // assetAuthorColumns são as colunas que vêm do JOIN em users e
@@ -151,6 +151,59 @@ func (r *AssetRepository) List(ctx context.Context) ([]*domain.Asset, error) {
 		return nil, fmt.Errorf("iterate assets: %w", err)
 	}
 	return assets, nil
+}
+
+// ListPaginated devolve uma página de assets (mesma ordenação do List)
+// MAIS o total geral pra que o frontend monte "Página X de Y". Duas
+// queries em paralelo (LIMIT/OFFSET + COUNT) seriam ideais via tx, mas
+// pra catálogo pequeno o overhead extra não vale — duas idas serialmente
+// já resolvem.
+//
+// page e pageSize são pré-validados pelo handler (page >= 1, pageSize
+// 1..100). Aqui só calculamos offset.
+func (r *AssetRepository) ListPaginated(ctx context.Context, page, pageSize int) ([]*domain.Asset, int64, error) {
+	offset := (page - 1) * pageSize
+
+	const listQ = `
+		SELECT a.id, a.owner_id, a.title, a.description, a.tags,
+		       a.price_cents, a.thumbnail_path, a.model_path,
+		       a.created_at, a.updated_at, ` + assetAuthorColumns + `,
+		       ` + assetReviewAggCols + `
+		  FROM assets a
+		  JOIN users u ON u.id = a.owner_id
+		 ORDER BY a.created_at DESC
+		 LIMIT $1 OFFSET $2`
+
+	rows, err := r.db.Query(ctx, listQ, pageSize, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("select assets page: %w", err)
+	}
+	defer rows.Close()
+
+	assets := make([]*domain.Asset, 0, pageSize)
+	for rows.Next() {
+		a := &domain.Asset{}
+		if err := rows.Scan(
+			&a.ID, &a.OwnerID, &a.Title, &a.Description, &a.Tags,
+			&a.PriceCents, &a.ThumbnailPath, &a.ModelPath,
+			&a.CreatedAt, &a.UpdatedAt,
+			&a.AuthorName, &a.AuthorUsername, &a.AuthorAvatarPath,
+			&a.AverageRating, &a.ReviewCount,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan asset page row: %w", err)
+		}
+		assets = append(assets, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate assets page: %w", err)
+	}
+
+	var total int64
+	if err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM assets`).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count assets: %w", err)
+	}
+
+	return assets, total, nil
 }
 
 // ListByOwner é o gêmeo "privado" de List: mesmo shape de retorno,

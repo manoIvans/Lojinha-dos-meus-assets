@@ -30,6 +30,7 @@ const ProfileMe = lazy(() => import('./pages/ProfileMe'))
 const UserProfile = lazy(() => import('./pages/UserProfile'))
 const Favorites = lazy(() => import('./pages/Favorites'))
 const Cart = lazy(() => import('./pages/Cart'))
+const Checkout = lazy(() => import('./pages/Checkout'))
 const Creators = lazy(() => import('./pages/Creators'))
 const Notifications = lazy(() => import('./pages/Notifications'))
 
@@ -178,6 +179,20 @@ export default function App() {
               <ProtectedRoute>
                 <Suspense fallback={<RouteFallback />}>
                   <Cart />
+                </Suspense>
+              </ProtectedRoute>
+            }
+          />
+          {/* /checkout/:sessionId: STUB do provedor de pagamento.
+              Mostra total + botão "Pagar" que chama POST /confirm.
+              Em produção real, esta rota some — usuário sai do app
+              pro Stripe/MP e volta via webhook. */}
+          <Route
+            path="/checkout/:sessionId"
+            element={
+              <ProtectedRoute>
+                <Suspense fallback={<RouteFallback />}>
+                  <Checkout />
                 </Suspense>
               </ProtectedRoute>
             }
