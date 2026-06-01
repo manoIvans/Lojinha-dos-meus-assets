@@ -161,6 +161,9 @@ export type Purchase = {
   price_cents_snapshot: number
   purchased_at: string
   asset?: Asset | null
+  // from_pack_id: marcado quando a purchase nasceu de um pack no
+  // checkout. Frontend mostra "comprado via pack #X" na biblioteca.
+  from_pack_id?: number | null
 }
 
 // CheckoutSessionStatus espelha o que o backend grava em
@@ -182,6 +185,42 @@ export type CheckoutSession = {
   expires_at: string
   paid_at?: string | null
   purchase_ids?: number[]
+}
+
+// Pack agrupa N assets do mesmo vendedor num bundle com preço próprio.
+// Shape devolvido por /packs (listagem) e /packs/:id (detalhe). Em
+// listagem vem com `items_count` mas SEM `items` aninhado; em detalhe
+// vem com `items: Asset[]`. Adapta no consumidor via opcionais.
+export type Pack = {
+  id: number
+  owner_id: number
+  title: string
+  description: string
+  price_cents: number
+  thumbnail_path?: string | null
+  // Items aninhados — populado em GetByID, ausente em List.
+  items?: Asset[]
+  // Author desnormalizado via JOIN (similar a Asset).
+  author_name?: string
+  author_username?: string
+  author_avatar_path?: string | null
+  items_count?: number
+  created_at: string
+  updated_at: string
+}
+
+// CartResponse: shape de `GET /my/cart`. Desde o carrinho misto
+// (assets + packs), front sempre recebe os dois.
+export type CartResponse = {
+  assets: Asset[]
+  packs: Pack[]
+}
+
+// CartIDsResponse: shape de `GET /my/cart-ids`. Sets separados pra
+// hidratar `isInCart` e `isPackInCart` no CartContext.
+export type CartIDsResponse = {
+  asset_ids: number[]
+  pack_ids: number[]
 }
 
 export type Asset = {

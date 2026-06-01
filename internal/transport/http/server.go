@@ -87,6 +87,9 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStor
 	purchaseRepo := postgres.NewPurchaseRepository(db)
 	cartHandler := handler.NewCartHandler(cartRepo, purchaseRepo, notificationRepo)
 
+	packRepo := postgres.NewPackRepository(db)
+	packHandler := handler.NewPackHandler(packRepo, files)
+
 	reviewRepo := postgres.NewReviewRepository(db)
 	reviewHandler := handler.NewReviewHandler(reviewRepo, purchaseRepo, notificationRepo)
 
@@ -116,6 +119,11 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStor
 		// abaixo, com checagem de compra.
 		api.GET("/assets/:id/reviews", reviewHandler.List)
 		api.GET("/assets/:id/reviews/summary", reviewHandler.Summary)
+
+		// Packs públicos (listagem + detalhe). Editorial agrupando
+		// N assets do mesmo vendedor num único item à venda.
+		api.GET("/packs", packHandler.List)
+		api.GET("/packs/:id", packHandler.GetByID)
 
 		// Diretório de criadores. Pública porque o catálogo já
 		// expõe autores. Aceita ?limit= pra alimentar a sessão
@@ -162,6 +170,10 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStor
 			// de compras (Purchase[]); library-ids hidrata UI sem N+1.
 			protected.POST("/assets/:id/cart", cartHandler.Add)
 			protected.DELETE("/assets/:id/cart", cartHandler.Remove)
+			// Packs entram no carrinho como linha própria (carrinho misto
+			// asset/pack desde a migration 014). Checkout expande.
+			protected.POST("/packs/:id/cart", cartHandler.AddPack)
+			protected.DELETE("/packs/:id/cart", cartHandler.RemovePack)
 			protected.GET("/my/cart", cartHandler.List)
 			protected.GET("/my/cart-ids", cartHandler.ListIDs)
 			protected.DELETE("/my/cart", cartHandler.Clear)
@@ -187,6 +199,15 @@ func NewRouter(db *pgxpool.Pool, tm *auth.TokenManager, files *storage.LocalStor
 			protected.POST("/assets/:id/reviews", reviewHandler.Create)
 			protected.PUT("/reviews/:id", reviewHandler.Update)
 			protected.DELETE("/reviews/:id", reviewHandler.Delete)
+
+			// Packs — CRUD do vendedor. Create é multipart (texto +
+			// thumbnail opcional + asset_ids[]); Update é JSON puro.
+			// ReplaceThumbnail dedicado (mesmo padrão do asset).
+			protected.POST("/packs", packHandler.Create)
+			protected.PUT("/packs/:id", packHandler.Update)
+			protected.DELETE("/packs/:id", packHandler.Delete)
+			protected.PUT("/packs/:id/thumbnail", packHandler.ReplaceThumbnail)
+			protected.GET("/my/packs", packHandler.MyPacks)
 
 			// Notificações in-app do usuário. Geradas em hooks
 			// (CartHandler.Checkout, ReviewHandler.Create); aqui só

@@ -82,6 +82,9 @@ export default function Layout() {
           <NavLink to="/criadores" className={navLinkClasses}>
             Criadores
           </NavLink>
+          <NavLink to="/packs" className={navLinkClasses}>
+            Packs
+          </NavLink>
           {isAuthenticated && (
             <>
               <NavLink to="/my-store" className={navLinkClasses}>

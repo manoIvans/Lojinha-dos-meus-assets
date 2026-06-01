@@ -30,6 +30,10 @@ func setupCart(
 	h := NewCartHandler(cart, purchases, notifs)
 	eng := newTestEngine(t)
 	eng.POST("/assets/:id/cart", withAuthUser(authedUserID), h.Add)
+	eng.DELETE("/assets/:id/cart", withAuthUser(authedUserID), h.Remove)
+	eng.POST("/packs/:id/cart", withAuthUser(authedUserID), h.AddPack)
+	eng.DELETE("/packs/:id/cart", withAuthUser(authedUserID), h.RemovePack)
+	eng.GET("/my/cart", withAuthUser(authedUserID), h.List)
 	eng.POST("/my/cart/checkout", withAuthUser(authedUserID), h.Checkout)
 	eng.GET("/my/checkout/sessions/:id", withAuthUser(authedUserID), h.GetCheckoutSession)
 	eng.POST("/my/checkout/sessions/:id/confirm", withAuthUser(authedUserID), h.ConfirmCheckoutSession)
@@ -42,7 +46,7 @@ func setupCart(
 
 func TestCartAdd_Success(t *testing.T) {
 	cart := &fakeCartRepo{
-		AddFn: func(_ context.Context, userID, assetID int64) error {
+		AddAssetFn: func(_ context.Context, userID, assetID int64) error {
 			if userID != 10 || assetID != 5 {
 				t.Errorf("args inesperados: userID=%d assetID=%d", userID, assetID)
 			}
@@ -57,7 +61,7 @@ func TestCartAdd_Success(t *testing.T) {
 
 func TestCartAdd_AssetNotFound(t *testing.T) {
 	cart := &fakeCartRepo{
-		AddFn: func(_ context.Context, _, _ int64) error {
+		AddAssetFn: func(_ context.Context, _, _ int64) error {
 			return domain.ErrAssetNotFound
 		},
 	}
@@ -70,7 +74,7 @@ func TestCartAdd_AssetNotFound(t *testing.T) {
 
 func TestCartAdd_SelfPurchase(t *testing.T) {
 	cart := &fakeCartRepo{
-		AddFn: func(_ context.Context, _, _ int64) error {
+		AddAssetFn: func(_ context.Context, _, _ int64) error {
 			return domain.ErrSelfPurchase
 		},
 	}
@@ -259,4 +263,85 @@ func TestConfirmSession_NotFound(t *testing.T) {
 	eng, _ := setupCart(t, &fakeCartRepo{}, purchases, nil, 99)
 	w := doJSON(t, eng, http.MethodPost, "/my/checkout/sessions/inexistente/confirm", nil, "")
 	assertStatus(t, w, http.StatusNotFound)
+}
+
+// ============================================================
+// AddPack / RemovePack
+// ============================================================
+
+func TestCartAddPack_Success(t *testing.T) {
+	cart := &fakeCartRepo{
+		AddPackFn: func(_ context.Context, userID, packID int64) error {
+			if userID != 10 || packID != 7 {
+				t.Errorf("args: userID=%d packID=%d", userID, packID)
+			}
+			return nil
+		},
+	}
+	eng, _ := setupCart(t, cart, nil, nil, 10)
+	w := doJSON(t, eng, http.MethodPost, "/packs/7/cart", nil, "")
+	assertStatus(t, w, http.StatusNoContent)
+}
+
+func TestCartAddPack_NotFound(t *testing.T) {
+	cart := &fakeCartRepo{
+		AddPackFn: func(_ context.Context, _, _ int64) error {
+			return domain.ErrPackNotFound
+		},
+	}
+	eng, _ := setupCart(t, cart, nil, nil, 10)
+	w := doJSON(t, eng, http.MethodPost, "/packs/999/cart", nil, "")
+	assertStatus(t, w, http.StatusNotFound)
+	assertJSONString(t, w, "error", "pack não encontrado")
+}
+
+func TestCartAddPack_SelfPurchase(t *testing.T) {
+	cart := &fakeCartRepo{
+		AddPackFn: func(_ context.Context, _, _ int64) error {
+			return domain.ErrSelfPurchase
+		},
+	}
+	eng, _ := setupCart(t, cart, nil, nil, 10)
+	w := doJSON(t, eng, http.MethodPost, "/packs/7/cart", nil, "")
+	assertStatus(t, w, http.StatusConflict)
+}
+
+func TestCartRemovePack_Success(t *testing.T) {
+	cart := &fakeCartRepo{
+		RemovePackFn: func(_ context.Context, userID, packID int64) error {
+			if userID != 10 || packID != 7 {
+				t.Errorf("args: userID=%d packID=%d", userID, packID)
+			}
+			return nil
+		},
+	}
+	eng, _ := setupCart(t, cart, nil, nil, 10)
+	w := doJSON(t, eng, http.MethodDelete, "/packs/7/cart", nil, "")
+	assertStatus(t, w, http.StatusNoContent)
+}
+
+// ============================================================
+// List (carrinho misto)
+// ============================================================
+
+func TestCartList_MixedShape(t *testing.T) {
+	// List devolve `{assets, packs}` — confirma o shape novo.
+	cart := &fakeCartRepo{
+		ListAssetsFn: func(_ context.Context, _ int64) ([]*domain.Asset, error) {
+			return []*domain.Asset{{ID: 1, Title: "A"}}, nil
+		},
+		ListPacksFn: func(_ context.Context, _ int64) ([]*domain.Pack, error) {
+			return []*domain.Pack{{ID: 7, Title: "P"}}, nil
+		},
+	}
+	eng, _ := setupCart(t, cart, nil, nil, 10)
+	w := doJSON(t, eng, http.MethodGet, "/my/cart", nil, "")
+	assertStatus(t, w, http.StatusOK)
+	body := decodeJSON(t, w)
+	if _, ok := body["assets"]; !ok {
+		t.Error("response deveria ter chave `assets`")
+	}
+	if _, ok := body["packs"]; !ok {
+		t.Error("response deveria ter chave `packs`")
+	}
 }

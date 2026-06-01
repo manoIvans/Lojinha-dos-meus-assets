@@ -11,13 +11,18 @@ import (
 	"github.com/manoIvans/manomesh/internal/domain"
 )
 
-// cartRepository é a interface mínima que o CartHandler usa.
+// cartRepository: contrato mínimo do CartHandler. Carrinho misto desde
+// a migration 014 (asset XOR pack), daí duas famílias de métodos.
 type cartRepository interface {
-	Add(ctx context.Context, userID, assetID int64) error
-	Remove(ctx context.Context, userID, assetID int64) error
+	AddAsset(ctx context.Context, userID, assetID int64) error
+	AddPack(ctx context.Context, userID, packID int64) error
+	RemoveAsset(ctx context.Context, userID, assetID int64) error
+	RemovePack(ctx context.Context, userID, packID int64) error
 	Clear(ctx context.Context, userID int64) error
-	ListByUser(ctx context.Context, userID int64) ([]*domain.Asset, error)
-	ListIDsByUser(ctx context.Context, userID int64) ([]int64, error)
+	ListAssetsByUser(ctx context.Context, userID int64) ([]*domain.Asset, error)
+	ListPacksByUser(ctx context.Context, userID int64) ([]*domain.Pack, error)
+	ListAssetIDsByUser(ctx context.Context, userID int64) ([]int64, error)
+	ListPackIDsByUser(ctx context.Context, userID int64) ([]int64, error)
 }
 
 // purchaseRepository é a interface mínima usada pelo CartHandler
@@ -56,8 +61,8 @@ func NewCartHandler(cart cartRepository, purchases purchaseRepository, notificat
 	return &CartHandler{cart: cart, purchases: purchases, notifications: notifications}
 }
 
-// Add coloca um asset no carrinho do usuário do JWT. 204 em sucesso.
-// 404 se asset não existe; 409 se for próprio asset.
+// Add (asset solto) coloca o asset no carrinho do user do JWT. 204 em
+// sucesso. 404 se asset não existe; 409 se for próprio asset.
 func (h *CartHandler) Add(c *gin.Context) {
 	userID, ok := userIDFromContext(c)
 	if !ok {
@@ -68,7 +73,7 @@ func (h *CartHandler) Add(c *gin.Context) {
 		return
 	}
 
-	if err := h.cart.Add(c.Request.Context(), userID, assetID); err != nil {
+	if err := h.cart.AddAsset(c.Request.Context(), userID, assetID); err != nil {
 		switch {
 		case errors.Is(err, domain.ErrAssetNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "asset não encontrado"})
@@ -82,7 +87,33 @@ func (h *CartHandler) Add(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// Remove tira do carrinho. Idempotente.
+// AddPack coloca um pack inteiro no carrinho. Mesma semântica de Add
+// (204/404/409) mas sentinel diferente pra 404 (ErrPackNotFound).
+func (h *CartHandler) AddPack(c *gin.Context) {
+	userID, ok := userIDFromContext(c)
+	if !ok {
+		return
+	}
+	packID, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+
+	if err := h.cart.AddPack(c.Request.Context(), userID, packID); err != nil {
+		switch {
+		case errors.Is(err, domain.ErrPackNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "pack não encontrado"})
+		case errors.Is(err, domain.ErrSelfPurchase):
+			c.JSON(http.StatusConflict, gin.H{"error": "não pode comprar o próprio pack"})
+		default:
+			serverError(c, "add pack to cart", err, "falha ao adicionar pack ao carrinho")
+		}
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// Remove (asset solto) tira do carrinho. Idempotente.
 func (h *CartHandler) Remove(c *gin.Context) {
 	userID, ok := userIDFromContext(c)
 	if !ok {
@@ -93,8 +124,26 @@ func (h *CartHandler) Remove(c *gin.Context) {
 		return
 	}
 
-	if err := h.cart.Remove(c.Request.Context(), userID, assetID); err != nil {
+	if err := h.cart.RemoveAsset(c.Request.Context(), userID, assetID); err != nil {
 		serverError(c, "remove from cart", err, "falha ao remover do carrinho")
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// RemovePack tira o pack do carrinho. Idempotente.
+func (h *CartHandler) RemovePack(c *gin.Context) {
+	userID, ok := userIDFromContext(c)
+	if !ok {
+		return
+	}
+	packID, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+
+	if err := h.cart.RemovePack(c.Request.Context(), userID, packID); err != nil {
+		serverError(c, "remove pack from cart", err, "falha ao remover pack do carrinho")
 		return
 	}
 	c.Status(http.StatusNoContent)
@@ -114,37 +163,49 @@ func (h *CartHandler) Clear(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// List devolve o carrinho como Asset[]. Mesmo shape de /my/assets,
-// /my/favorites etc. — front reusa o card.
+// List devolve o carrinho misto: assets soltos + packs. Shape:
+// `{assets: Asset[], packs: Pack[]}`. Cada lista vem ordenada por
+// added_at DESC dentro do seu tipo. Frontend renderiza linhas
+// diferenciadas pra cada um.
 func (h *CartHandler) List(c *gin.Context) {
 	userID, ok := userIDFromContext(c)
 	if !ok {
 		return
 	}
 
-	assets, err := h.cart.ListByUser(c.Request.Context(), userID)
+	assets, err := h.cart.ListAssetsByUser(c.Request.Context(), userID)
 	if err != nil {
-		serverError(c, "list cart", err, "falha ao listar carrinho")
+		serverError(c, "list cart assets", err, "falha ao listar carrinho")
 		return
 	}
-	c.JSON(http.StatusOK, assets)
+	packs, err := h.cart.ListPacksByUser(c.Request.Context(), userID)
+	if err != nil {
+		serverError(c, "list cart packs", err, "falha ao listar carrinho")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"assets": assets, "packs": packs})
 }
 
-// ListIDs: só os IDs, pra hidratar UI sem N+1.
-// Wrap num objeto {"ids": [...]} pra que evolução futura (ex: total)
-// não quebre client.
+// ListIDs: hidrata UI sem N+1. Devolve dois sets — `asset_ids` e
+// `pack_ids` — pra que cards de asset e packs no catálogo saibam
+// "isto está no carrinho?".
 func (h *CartHandler) ListIDs(c *gin.Context) {
 	userID, ok := userIDFromContext(c)
 	if !ok {
 		return
 	}
 
-	ids, err := h.cart.ListIDsByUser(c.Request.Context(), userID)
+	assetIDs, err := h.cart.ListAssetIDsByUser(c.Request.Context(), userID)
 	if err != nil {
-		serverError(c, "list cart ids", err, "falha ao listar carrinho")
+		serverError(c, "list cart asset ids", err, "falha ao listar carrinho")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ids": ids})
+	packIDs, err := h.cart.ListPackIDsByUser(c.Request.Context(), userID)
+	if err != nil {
+		serverError(c, "list cart pack ids", err, "falha ao listar carrinho")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"asset_ids": assetIDs, "pack_ids": packIDs})
 }
 
 // Checkout abre uma checkout_session em estado 'pending' com as

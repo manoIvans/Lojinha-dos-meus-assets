@@ -2,20 +2,32 @@ package handler
 
 import (
 	"context"
+	"mime/multipart"
 	"net/http"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/manoIvans/manomesh/internal/domain"
+	"github.com/manoIvans/manomesh/internal/storage"
 )
 
-// Testes do UserHandler. Cobre GetMe, GetByUsername, UpdateMe e List
-// (diretório). Upload/Delete avatar pulados — multipart custoso.
+// Testes do UserHandler. Cobre GetMe, GetByUsername, UpdateMe, List
+// (diretório, com paginação) e upload/delete de avatar (multipart).
 
 func setupUsers(t *testing.T, repo *fakeUserProfileRepo, authedUserID int64) *gin.Engine {
 	t.Helper()
-	h := NewUserHandler(repo, &fakeAvatarStorage{})
+	return setupUsersWithStorage(t, repo, &fakeAvatarStorage{}, authedUserID)
+}
+
+func setupUsersWithStorage(
+	t *testing.T,
+	repo *fakeUserProfileRepo,
+	store *fakeAvatarStorage,
+	authedUserID int64,
+) *gin.Engine {
+	t.Helper()
+	h := NewUserHandler(repo, store)
 	eng := newTestEngine(t)
 	// Públicas
 	eng.GET("/users", h.List)
@@ -23,6 +35,8 @@ func setupUsers(t *testing.T, repo *fakeUserProfileRepo, authedUserID int64) *gi
 	// Protegidas
 	eng.GET("/users/me", withAuthUser(authedUserID), h.GetMe)
 	eng.PATCH("/users/me", withAuthUser(authedUserID), h.UpdateMe)
+	eng.POST("/users/me/avatar", withAuthUser(authedUserID), h.UploadAvatar)
+	eng.DELETE("/users/me/avatar", withAuthUser(authedUserID), h.DeleteAvatar)
 	return eng
 }
 
@@ -207,4 +221,192 @@ func TestList_PageSizeCapped(t *testing.T) {
 	eng := setupUsers(t, repo, 0)
 	w := doJSON(t, eng, http.MethodGet, "/users?page=1&page_size=9999", nil, "")
 	assertStatus(t, w, http.StatusOK)
+}
+
+// ============================================================
+// UploadAvatar / DeleteAvatar (multipart)
+// ============================================================
+
+func TestUploadAvatar_Success_RemovesOld(t *testing.T) {
+	removed := []string{}
+	store := &fakeAvatarStorage{
+		SaveAvatarFn: func(fh *multipart.FileHeader) (string, error) {
+			if fh.Filename != "me.png" {
+				t.Errorf("avatar filename: %s", fh.Filename)
+			}
+			return "avatars/new.png", nil
+		},
+		RemoveFn: func(p string) error {
+			removed = append(removed, p)
+			return nil
+		},
+	}
+	repo := &fakeUserProfileRepo{
+		SetAvatarFn: func(_ context.Context, id int64, newPath string) (string, error) {
+			if id != 42 {
+				t.Errorf("SetAvatar id: %d", id)
+			}
+			if newPath != "avatars/new.png" {
+				t.Errorf("SetAvatar newPath: %s", newPath)
+			}
+			return "avatars/old.png", nil
+		},
+		FindByIDFn: func(_ context.Context, id int64) (*domain.User, error) {
+			return &domain.User{ID: id, Username: "ivan"}, nil
+		},
+	}
+	eng := setupUsersWithStorage(t, repo, store, 42)
+	w := doMultipart(t, eng, http.MethodPost, "/users/me/avatar",
+		nil,
+		[]multipartFile{
+			{field: "avatar", filename: "me.png", content: []byte("png")},
+		},
+		"",
+	)
+	assertStatus(t, w, http.StatusOK)
+	if len(removed) != 1 || removed[0] != "avatars/old.png" {
+		t.Errorf("avatar antigo deveria ser removido, got %v", removed)
+	}
+}
+
+func TestUploadAvatar_FirstTime_NoOldRemoval(t *testing.T) {
+	// Usuário sem avatar prévio: SetAvatar devolve "" como oldPath →
+	// handler NÃO chama Remove.
+	removed := []string{}
+	store := &fakeAvatarStorage{
+		SaveAvatarFn: func(*multipart.FileHeader) (string, error) {
+			return "avatars/first.png", nil
+		},
+		RemoveFn: func(p string) error {
+			removed = append(removed, p)
+			return nil
+		},
+	}
+	repo := &fakeUserProfileRepo{
+		SetAvatarFn: func(_ context.Context, _ int64, _ string) (string, error) {
+			return "", nil
+		},
+		FindByIDFn: func(_ context.Context, id int64) (*domain.User, error) {
+			return &domain.User{ID: id}, nil
+		},
+	}
+	eng := setupUsersWithStorage(t, repo, store, 42)
+	w := doMultipart(t, eng, http.MethodPost, "/users/me/avatar",
+		nil,
+		[]multipartFile{
+			{field: "avatar", filename: "first.png", content: []byte("png")},
+		},
+		"",
+	)
+	assertStatus(t, w, http.StatusOK)
+	if len(removed) != 0 {
+		t.Errorf("Remove não deveria ser chamado sem avatar prévio, got %v", removed)
+	}
+}
+
+func TestUploadAvatar_MissingField(t *testing.T) {
+	eng := setupUsersWithStorage(t, &fakeUserProfileRepo{}, &fakeAvatarStorage{}, 42)
+	w := doMultipart(t, eng, http.MethodPost, "/users/me/avatar",
+		map[string]string{"junk": "x"},
+		nil,
+		"",
+	)
+	assertStatus(t, w, http.StatusBadRequest)
+	assertJSONString(t, w, "error", "campo 'avatar' é obrigatório")
+}
+
+func TestUploadAvatar_StorageRejectsType(t *testing.T) {
+	store := &fakeAvatarStorage{
+		SaveAvatarFn: func(*multipart.FileHeader) (string, error) {
+			return "", storage.ErrFileTypeInvalid
+		},
+	}
+	eng := setupUsersWithStorage(t, &fakeUserProfileRepo{}, store, 42)
+	w := doMultipart(t, eng, http.MethodPost, "/users/me/avatar",
+		nil,
+		[]multipartFile{
+			{field: "avatar", filename: "me.bmp", content: []byte("nope")},
+		},
+		"",
+	)
+	assertStatus(t, w, http.StatusUnsupportedMediaType)
+}
+
+func TestUploadAvatar_DBFails_RollsBackNewFile(t *testing.T) {
+	// Arquivo salvo, mas SetAvatar falha → handler deve remover o
+	// arquivo novo pra não vazar disco.
+	removed := []string{}
+	store := &fakeAvatarStorage{
+		SaveAvatarFn: func(*multipart.FileHeader) (string, error) {
+			return "avatars/new.png", nil
+		},
+		RemoveFn: func(p string) error {
+			removed = append(removed, p)
+			return nil
+		},
+	}
+	repo := &fakeUserProfileRepo{
+		SetAvatarFn: func(_ context.Context, _ int64, _ string) (string, error) {
+			return "", domain.ErrUserNotFound
+		},
+	}
+	eng := setupUsersWithStorage(t, repo, store, 42)
+	w := doMultipart(t, eng, http.MethodPost, "/users/me/avatar",
+		nil,
+		[]multipartFile{
+			{field: "avatar", filename: "me.png", content: []byte("png")},
+		},
+		"",
+	)
+	assertStatus(t, w, http.StatusNotFound)
+	if len(removed) != 1 || removed[0] != "avatars/new.png" {
+		t.Errorf("arquivo novo deveria rollback, got %v", removed)
+	}
+}
+
+func TestDeleteAvatar_RemovesOld(t *testing.T) {
+	removed := []string{}
+	store := &fakeAvatarStorage{
+		RemoveFn: func(p string) error {
+			removed = append(removed, p)
+			return nil
+		},
+	}
+	repo := &fakeUserProfileRepo{
+		ClearAvatarFn: func(_ context.Context, id int64) (string, error) {
+			if id != 42 {
+				t.Errorf("ClearAvatar id: %d", id)
+			}
+			return "avatars/old.png", nil
+		},
+	}
+	eng := setupUsersWithStorage(t, repo, store, 42)
+	w := doJSON(t, eng, http.MethodDelete, "/users/me/avatar", nil, "")
+	assertStatus(t, w, http.StatusNoContent)
+	if len(removed) != 1 || removed[0] != "avatars/old.png" {
+		t.Errorf("avatar antigo deveria ser removido, got %v", removed)
+	}
+}
+
+func TestDeleteAvatar_NoPrevious_NoOp(t *testing.T) {
+	// Idempotente: chamar delete quando não tem avatar não erra e não
+	// chama Remove.
+	removed := []string{}
+	store := &fakeAvatarStorage{
+		RemoveFn: func(p string) error {
+			removed = append(removed, p)
+			return nil
+		},
+	}
+	repo := &fakeUserProfileRepo{
+		ClearAvatarFn: func(_ context.Context, _ int64) (string, error) {
+			return "", nil
+		},
+	}
+	eng := setupUsersWithStorage(t, repo, store, 42)
+	w := doJSON(t, eng, http.MethodDelete, "/users/me/avatar", nil, "")
+	assertStatus(t, w, http.StatusNoContent)
+	if len(removed) != 0 {
+		t.Errorf("Remove não deveria ser chamado sem avatar, got %v", removed)
+	}
 }

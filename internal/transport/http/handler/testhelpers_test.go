@@ -60,6 +60,105 @@ func doJSON(t *testing.T, eng *gin.Engine, method, path string, body any, token 
 	return w
 }
 
+// multipartFile descreve um arquivo a anexar no doMultipart. Mantemos
+// `content` como []byte (em vez de io.Reader) pra que o teste possa
+// reusar fácil e validar tamanho — uploads são pequenos nos tests.
+type multipartFile struct {
+	field    string
+	filename string
+	content  []byte
+}
+
+// doMultipart monta uma request multipart/form-data com campos texto e
+// arquivos. Reusado pelos tests de Create asset, avatar upload e
+// replaceThumbnail/replaceModel — todos têm o mesmo padrão (alguns
+// fields + um ou dois files). Sem token quando string vazia.
+func doMultipart(
+	t *testing.T,
+	eng *gin.Engine,
+	method, path string,
+	fields map[string]string,
+	files []multipartFile,
+	token string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+
+	for k, v := range fields {
+		if err := mw.WriteField(k, v); err != nil {
+			t.Fatalf("write field %q: %v", k, err)
+		}
+	}
+	for _, f := range files {
+		w, err := mw.CreateFormFile(f.field, f.filename)
+		if err != nil {
+			t.Fatalf("create form file %q: %v", f.field, err)
+		}
+		if _, err := w.Write(f.content); err != nil {
+			t.Fatalf("write form file %q: %v", f.field, err)
+		}
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart: %v", err)
+	}
+
+	req := httptest.NewRequest(method, path, &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	w := httptest.NewRecorder()
+	eng.ServeHTTP(w, req)
+	return w
+}
+
+// doMultipartWithRepeats é o doMultipart com suporte a múltiplos
+// valores por chave — necessário pra campos como `tags` que o handler
+// lê com PostFormArray. Cada valor da slice vira um WriteField separado
+// com a mesma chave.
+func doMultipartWithRepeats(
+	t *testing.T,
+	eng *gin.Engine,
+	method, path string,
+	fields map[string][]string,
+	files []multipartFile,
+	token string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+
+	for k, vs := range fields {
+		for _, v := range vs {
+			if err := mw.WriteField(k, v); err != nil {
+				t.Fatalf("write field %q: %v", k, err)
+			}
+		}
+	}
+	for _, f := range files {
+		w, err := mw.CreateFormFile(f.field, f.filename)
+		if err != nil {
+			t.Fatalf("create form file %q: %v", f.field, err)
+		}
+		if _, err := w.Write(f.content); err != nil {
+			t.Fatalf("write form file %q: %v", f.field, err)
+		}
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart: %v", err)
+	}
+
+	req := httptest.NewRequest(method, path, &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	w := httptest.NewRecorder()
+	eng.ServeHTTP(w, req)
+	return w
+}
+
 // decodeJSON é açúcar pra ler o body da response como map.
 func decodeJSON(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
@@ -166,24 +265,40 @@ func (f *fakePurchaseCheck) IsPurchased(ctx context.Context, userID, assetID int
 // ============================================================
 
 type fakeCartRepo struct {
-	AddFn       func(ctx context.Context, userID, assetID int64) error
-	RemoveFn    func(ctx context.Context, userID, assetID int64) error
-	ClearFn     func(ctx context.Context, userID int64) error
-	ListFn      func(ctx context.Context, userID int64) ([]*domain.Asset, error)
-	ListIDsFn   func(ctx context.Context, userID int64) ([]int64, error)
+	AddAssetFn       func(ctx context.Context, userID, assetID int64) error
+	AddPackFn        func(ctx context.Context, userID, packID int64) error
+	RemoveAssetFn    func(ctx context.Context, userID, assetID int64) error
+	RemovePackFn     func(ctx context.Context, userID, packID int64) error
+	ClearFn          func(ctx context.Context, userID int64) error
+	ListAssetsFn     func(ctx context.Context, userID int64) ([]*domain.Asset, error)
+	ListPacksFn      func(ctx context.Context, userID int64) ([]*domain.Pack, error)
+	ListAssetIDsFn   func(ctx context.Context, userID int64) ([]int64, error)
+	ListPackIDsFn    func(ctx context.Context, userID int64) ([]int64, error)
 }
 
-func (f *fakeCartRepo) Add(ctx context.Context, userID, assetID int64) error {
-	if f.AddFn == nil {
-		panic("fakeCartRepo.Add chamado sem mock configurado")
+func (f *fakeCartRepo) AddAsset(ctx context.Context, userID, assetID int64) error {
+	if f.AddAssetFn == nil {
+		panic("fakeCartRepo.AddAsset chamado sem mock configurado")
 	}
-	return f.AddFn(ctx, userID, assetID)
+	return f.AddAssetFn(ctx, userID, assetID)
 }
-func (f *fakeCartRepo) Remove(ctx context.Context, userID, assetID int64) error {
-	if f.RemoveFn == nil {
-		panic("fakeCartRepo.Remove chamado sem mock configurado")
+func (f *fakeCartRepo) AddPack(ctx context.Context, userID, packID int64) error {
+	if f.AddPackFn == nil {
+		panic("fakeCartRepo.AddPack chamado sem mock configurado")
 	}
-	return f.RemoveFn(ctx, userID, assetID)
+	return f.AddPackFn(ctx, userID, packID)
+}
+func (f *fakeCartRepo) RemoveAsset(ctx context.Context, userID, assetID int64) error {
+	if f.RemoveAssetFn == nil {
+		panic("fakeCartRepo.RemoveAsset chamado sem mock configurado")
+	}
+	return f.RemoveAssetFn(ctx, userID, assetID)
+}
+func (f *fakeCartRepo) RemovePack(ctx context.Context, userID, packID int64) error {
+	if f.RemovePackFn == nil {
+		panic("fakeCartRepo.RemovePack chamado sem mock configurado")
+	}
+	return f.RemovePackFn(ctx, userID, packID)
 }
 func (f *fakeCartRepo) Clear(ctx context.Context, userID int64) error {
 	if f.ClearFn == nil {
@@ -191,17 +306,29 @@ func (f *fakeCartRepo) Clear(ctx context.Context, userID int64) error {
 	}
 	return f.ClearFn(ctx, userID)
 }
-func (f *fakeCartRepo) ListByUser(ctx context.Context, userID int64) ([]*domain.Asset, error) {
-	if f.ListFn == nil {
-		panic("fakeCartRepo.ListByUser chamado sem mock configurado")
+func (f *fakeCartRepo) ListAssetsByUser(ctx context.Context, userID int64) ([]*domain.Asset, error) {
+	if f.ListAssetsFn == nil {
+		panic("fakeCartRepo.ListAssetsByUser chamado sem mock configurado")
 	}
-	return f.ListFn(ctx, userID)
+	return f.ListAssetsFn(ctx, userID)
 }
-func (f *fakeCartRepo) ListIDsByUser(ctx context.Context, userID int64) ([]int64, error) {
-	if f.ListIDsFn == nil {
-		panic("fakeCartRepo.ListIDsByUser chamado sem mock configurado")
+func (f *fakeCartRepo) ListPacksByUser(ctx context.Context, userID int64) ([]*domain.Pack, error) {
+	if f.ListPacksFn == nil {
+		panic("fakeCartRepo.ListPacksByUser chamado sem mock configurado")
 	}
-	return f.ListIDsFn(ctx, userID)
+	return f.ListPacksFn(ctx, userID)
+}
+func (f *fakeCartRepo) ListAssetIDsByUser(ctx context.Context, userID int64) ([]int64, error) {
+	if f.ListAssetIDsFn == nil {
+		panic("fakeCartRepo.ListAssetIDsByUser chamado sem mock configurado")
+	}
+	return f.ListAssetIDsFn(ctx, userID)
+}
+func (f *fakeCartRepo) ListPackIDsByUser(ctx context.Context, userID int64) ([]int64, error) {
+	if f.ListPackIDsFn == nil {
+		panic("fakeCartRepo.ListPackIDsByUser chamado sem mock configurado")
+	}
+	return f.ListPackIDsFn(ctx, userID)
 }
 
 // ============================================================
@@ -547,6 +674,63 @@ func (f *fakeNotificationRepo) MarkAllRead(ctx context.Context, userID int64) er
 		panic("fakeNotificationRepo.MarkAllRead chamado sem mock")
 	}
 	return f.MarkAllReadFn(ctx, userID)
+}
+
+// ============================================================
+// Mock: packRepository (PackHandler)
+// ============================================================
+
+type fakePackRepo struct {
+	CreateFn          func(ctx context.Context, ownerID int64, title, description string, price int64, thumb string, assetIDs []int64) (*domain.Pack, error)
+	FindByIDFn        func(ctx context.Context, id int64) (*domain.Pack, error)
+	ListFn            func(ctx context.Context, page, pageSize int) ([]*domain.Pack, int64, error)
+	ListByOwnerFn     func(ctx context.Context, ownerID int64) ([]*domain.Pack, error)
+	UpdateFn          func(ctx context.Context, id, ownerID int64, title, description string, price int64, assetIDs []int64) (*domain.Pack, error)
+	DeleteFn          func(ctx context.Context, id, ownerID int64) (string, error)
+	UpdateThumbnailFn func(ctx context.Context, id, ownerID int64, newPath string) (string, error)
+}
+
+func (f *fakePackRepo) Create(ctx context.Context, ownerID int64, title, description string, price int64, thumb string, assetIDs []int64) (*domain.Pack, error) {
+	if f.CreateFn == nil {
+		panic("fakePackRepo.Create chamado sem mock")
+	}
+	return f.CreateFn(ctx, ownerID, title, description, price, thumb, assetIDs)
+}
+func (f *fakePackRepo) FindByID(ctx context.Context, id int64) (*domain.Pack, error) {
+	if f.FindByIDFn == nil {
+		panic("fakePackRepo.FindByID chamado sem mock")
+	}
+	return f.FindByIDFn(ctx, id)
+}
+func (f *fakePackRepo) List(ctx context.Context, page, pageSize int) ([]*domain.Pack, int64, error) {
+	if f.ListFn == nil {
+		panic("fakePackRepo.List chamado sem mock")
+	}
+	return f.ListFn(ctx, page, pageSize)
+}
+func (f *fakePackRepo) ListByOwner(ctx context.Context, ownerID int64) ([]*domain.Pack, error) {
+	if f.ListByOwnerFn == nil {
+		panic("fakePackRepo.ListByOwner chamado sem mock")
+	}
+	return f.ListByOwnerFn(ctx, ownerID)
+}
+func (f *fakePackRepo) Update(ctx context.Context, id, ownerID int64, title, description string, price int64, assetIDs []int64) (*domain.Pack, error) {
+	if f.UpdateFn == nil {
+		panic("fakePackRepo.Update chamado sem mock")
+	}
+	return f.UpdateFn(ctx, id, ownerID, title, description, price, assetIDs)
+}
+func (f *fakePackRepo) Delete(ctx context.Context, id, ownerID int64) (string, error) {
+	if f.DeleteFn == nil {
+		panic("fakePackRepo.Delete chamado sem mock")
+	}
+	return f.DeleteFn(ctx, id, ownerID)
+}
+func (f *fakePackRepo) UpdateThumbnail(ctx context.Context, id, ownerID int64, newPath string) (string, error) {
+	if f.UpdateThumbnailFn == nil {
+		panic("fakePackRepo.UpdateThumbnail chamado sem mock")
+	}
+	return f.UpdateThumbnailFn(ctx, id, ownerID, newPath)
 }
 
 // ============================================================

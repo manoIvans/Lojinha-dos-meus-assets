@@ -49,6 +49,19 @@ var ErrSessionExpired = errors.New("sessão de checkout expirada")
 // confirmar paid é idempotente e devolve sucesso. Mapeado pra 409.
 var ErrSessionInvalidState = errors.New("sessão em estado inválido para esta operação")
 
+// ErrPackNotFound: pack com ID inexistente. 404.
+var ErrPackNotFound = errors.New("pack não encontrado")
+
+// ErrPackForbidden: usuário tentou editar/deletar pack alheio. 403.
+var ErrPackForbidden = errors.New("operação não permitida neste pack")
+
+// ErrPackInvalidItems: cobre dois cenários:
+//   - asset_ids fora dos limites (min 2, max 50)
+//   - algum asset_id não pertence ao owner do pack (defense-in-depth)
+//
+// Mensagem genérica pra não revelar quais IDs falharam. 400.
+var ErrPackInvalidItems = errors.New("items do pack inválidos")
+
 // ErrReviewExists é retornado quando o usuário tenta criar um
 // review pro asset que já avaliou. UI deveria oferecer EDITAR, não
 // POST duplicado — mas o backend protege via UNIQUE constraint.
@@ -288,3 +301,48 @@ type TagCount struct {
 	Tag   string `json:"tag"`
 	Count int64  `json:"count"`
 }
+
+// Pack agrupa N assets do MESMO vendedor num único item à venda. Tem
+// preço próprio (geralmente desconto vs soma individual) e thumbnail
+// opcional (quando nil, frontend cai pra thumb do 1º item).
+//
+// `Items` vem populado por FindByID/listing com JOIN em pack_items +
+// assets. Pode vir vazio quando o caller só precisa do metadados (ex:
+// listagens minimalistas que evitam N+1).
+//
+// Constraints de negócio (validadas no PackRepository, não no schema):
+//   - Min 2 items por pack (1 item = só vende o asset direto)
+//   - Max 50 items por pack (defense vs payloads ridículos)
+//   - Todos os items pertencem ao mesmo owner do pack
+type Pack struct {
+	ID            int64    `json:"id"`
+	OwnerID       int64    `json:"owner_id"`
+	Title         string   `json:"title"`
+	Description   string   `json:"description"`
+	PriceCents    int64    `json:"price_cents"`
+	ThumbnailPath *string  `json:"thumbnail_path,omitempty"`
+	// Items aninhados (Asset[] na ordem definida pelo dono via `position`).
+	// Omitido em respostas de Create/Update (caller usa GetByID se quiser).
+	Items []*Asset `json:"items,omitempty"`
+
+	// Author desnormalizado via JOIN (similar a Asset). Omitido em respostas
+	// que não fazem o JOIN.
+	AuthorName       string  `json:"author_name,omitempty"`
+	AuthorUsername   string  `json:"author_username,omitempty"`
+	AuthorAvatarPath *string `json:"author_avatar_path,omitempty"`
+
+	// ItemsCount: quantidade total de assets no pack, populada em
+	// listagens que NÃO trazem Items aninhado. Listagem pode mostrar
+	// "10 assets" sem carregar todos.
+	ItemsCount int64 `json:"items_count,omitempty"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Limites do pack — replicados no handler pra validação JSON binding
+// e no repository pra defense-in-depth.
+const (
+	MinPackItems = 2
+	MaxPackItems = 50
+)

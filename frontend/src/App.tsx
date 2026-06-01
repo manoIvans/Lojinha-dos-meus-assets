@@ -31,6 +31,9 @@ const UserProfile = lazy(() => import('./pages/UserProfile'))
 const Favorites = lazy(() => import('./pages/Favorites'))
 const Cart = lazy(() => import('./pages/Cart'))
 const Checkout = lazy(() => import('./pages/Checkout'))
+const Packs = lazy(() => import('./pages/Packs'))
+const PackDetail = lazy(() => import('./pages/PackDetail'))
+const PackNew = lazy(() => import('./pages/PackNew'))
 const Creators = lazy(() => import('./pages/Creators'))
 const Notifications = lazy(() => import('./pages/Notifications'))
 
@@ -179,6 +182,35 @@ export default function App() {
               <ProtectedRoute>
                 <Suspense fallback={<RouteFallback />}>
                   <Cart />
+                </Suspense>
+              </ProtectedRoute>
+            }
+          />
+          {/* /packs: catálogo público de packs (bundles). */}
+          <Route
+            path="/packs"
+            element={
+              <Suspense fallback={<RouteFallback />}>
+                <Packs />
+              </Suspense>
+            }
+          />
+          {/* /pack/:id: detalhe público + add ao carrinho. */}
+          <Route
+            path="/pack/:id"
+            element={
+              <Suspense fallback={<RouteFallback />}>
+                <PackDetail />
+              </Suspense>
+            }
+          />
+          {/* /dashboard/packs/new: form de criação do vendedor. */}
+          <Route
+            path="/dashboard/packs/new"
+            element={
+              <ProtectedRoute>
+                <Suspense fallback={<RouteFallback />}>
+                  <PackNew />
                 </Suspense>
               </ProtectedRoute>
             }

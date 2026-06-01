@@ -5,7 +5,9 @@ import {
   api,
   fileUrl,
   type Asset,
+  type CartResponse,
   type CheckoutSession,
+  type Pack,
 } from '../api/client'
 import { useCart } from '../cart/CartContext'
 import { formatPrice } from '../lib/format'
@@ -13,36 +15,35 @@ import Avatar from '../components/Avatar'
 import LineSkeleton from '../components/LineSkeleton'
 import { useToast } from '../components/Toast'
 
-// /carrinho: tela final antes do checkout.
+// /carrinho: revisão final antes do checkout. Suporta carrinho misto
+// (assets soltos + packs) desde a Fase 2 de packs.
 //
-// Layout vertical (linha por asset) em vez de grid de cards — aqui
-// o usuário não está descobrindo conteúdo, está revisando uma lista
-// finita pra confirmar. Cada linha tem thumb + título + autor +
-// preço + botão "remover". Embaixo: total + botão "Finalizar compra".
+// Layout vertical (linha por item) em vez de grid de cards — usuário
+// revisa lista finita pra confirmar. Cada linha tem thumb + título +
+// autor + preço + botão ✗. Linhas de pack mostram contagem de items.
+// Embaixo: total + botão "Finalizar".
 //
-// Sincronização com CartContext: a lista local de assets vem do
-// GET /my/cart; mas filtramos pelo Set do contexto pra que clicar
-// "remover" some o item na hora (optimistic). Quando o context Set
-// remove um ID, esse asset some daqui.
+// Sincronização com CartContext: filtramos pelos Sets do contexto
+// (ids + packIds) pra que clicar "remover" tire o item na hora.
 
 export default function Cart() {
   const navigate = useNavigate()
   const toast = useToast()
-  const { ids, markPurchased } = useCart()
+  const { ids, packIds, markPurchased } = useCart()
 
-  const [assets, setAssets] = useState<Asset[] | null>(null)
+  const [data, setData] = useState<CartResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [checkingOut, setCheckingOut] = useState(false)
 
   const load = useCallback(() => {
     setError(null)
-    setAssets(null)
+    setData(null)
     let cancelled = false
 
     api
-      .get<Asset[]>('/api/v1/my/cart')
-      .then((data) => {
-        if (!cancelled) setAssets(data)
+      .get<CartResponse>('/api/v1/my/cart')
+      .then((d) => {
+        if (!cancelled) setData(d)
       })
       .catch(() => {
         if (!cancelled) setError('Falha ao carregar o carrinho.')
@@ -58,35 +59,42 @@ export default function Cart() {
     return cancel
   }, [load])
 
-  // visible: filtra pelo Set do CartContext pra que UI reaja
-  // imediatamente a toggles do CartButton (otimistic update).
-  const visible = useMemo<Asset[] | null>(() => {
-    if (!assets) return null
-    if (!ids) return assets
-    return assets.filter((a) => ids.has(a.id))
-  }, [assets, ids])
+  // visibleAssets/visiblePacks: filtra pelos Sets do CartContext.
+  const visibleAssets = useMemo<Asset[] | null>(() => {
+    if (!data) return null
+    if (!ids) return data.assets
+    return data.assets.filter((a) => ids.has(a.id))
+  }, [data, ids])
 
-  // Total em centavos (Math integer) → formata uma vez no render.
-  // Quando visible é null, total fica 0 (mostramos "..." no UI).
+  const visiblePacks = useMemo<Pack[] | null>(() => {
+    if (!data) return null
+    if (!packIds) return data.packs
+    return data.packs.filter((p) => packIds.has(p.id))
+  }, [data, packIds])
+
   const totalCents = useMemo<number>(() => {
-    if (!visible) return 0
-    return visible.reduce((sum, a) => sum + a.price_cents, 0)
-  }, [visible])
+    let t = 0
+    for (const a of visibleAssets ?? []) t += a.price_cents
+    for (const p of visiblePacks ?? []) t += p.price_cents
+    return t
+  }, [visibleAssets, visiblePacks])
+
+  const totalItems =
+    (visibleAssets?.length ?? 0) + (visiblePacks?.length ?? 0)
+  const loading = !error && data === null
 
   async function handleCheckout() {
-    if (!visible || visible.length === 0) return
+    if (totalItems === 0) return
     setCheckingOut(true)
     try {
-      // Backend cria a sessão pending e esvazia o carrinho. O fluxo de
-      // pagamento real (Stripe/MP) faria redirect pra página externa;
-      // no stub, mandamos pro /checkout/:id (página interna que
-      // simula o provedor).
       const session = await api.post<CheckoutSession>(
         '/api/v1/my/cart/checkout',
       )
-      // Carrinho já foi esvaziado no backend; reflete localmente pra
-      // que badge/contexto não fiquem stale.
-      markPurchased(visible.map((a) => a.id))
+      // Carrinho já foi esvaziado no backend; reflete localmente. Como
+      // packs viram N purchases no confirm, não temos os asset IDs
+      // exatos aqui — passar [] limpa o cart no context; purchasedIds
+      // será atualizado no próximo refresh após o /confirm.
+      markPurchased([])
       navigate(`/checkout/${session.id}`, { replace: true })
     } catch (err) {
       toast.error(messageForCheckout(err))
@@ -97,11 +105,12 @@ export default function Cart() {
   return (
     <div className="max-w-3xl mx-auto p-6 space-y-6">
       <Hero
-        count={error ? null : visible?.length ?? null}
-        loading={!error && visible === null}
+        count={error ? null : loading ? null : totalItems}
+        loading={loading}
       />
       <Content
-        assets={visible}
+        assets={visibleAssets}
+        packs={visiblePacks}
         error={error}
         onRetry={load}
         totalCents={totalCents}
@@ -146,6 +155,7 @@ function subtitle(count: number | null, loading: boolean): string {
 
 function Content({
   assets,
+  packs,
   error,
   onRetry,
   totalCents,
@@ -153,6 +163,7 @@ function Content({
   checkingOut,
 }: {
   assets: Asset[] | null
+  packs: Pack[] | null
   error: string | null
   onRetry: () => void
   totalCents: number
@@ -183,7 +194,7 @@ function Content({
     )
   }
 
-  if (assets === null) {
+  if (assets === null || packs === null) {
     return (
       <ul className="space-y-3" aria-busy="true" aria-live="polite">
         {Array.from({ length: 3 }).map((_, i) => (
@@ -193,7 +204,7 @@ function Content({
     )
   }
 
-  if (assets.length === 0) {
+  if (assets.length === 0 && packs.length === 0) {
     return (
       <div className="bg-parchment border-4 border-ink shadow-pixel p-12 text-center">
         <p className="text-5xl mb-4" aria-hidden="true">
@@ -203,7 +214,7 @@ function Content({
           Carrinho vazio
         </p>
         <p className="text-xs text-ink/70 tracking-wider mb-6">
-          Adicione assets pelo botão ⌬ no card ou na página do asset.
+          Adicione assets pelo botão ⌬ no card ou compre um pack inteiro.
         </p>
         <Link
           to="/"
@@ -223,8 +234,11 @@ function Content({
   return (
     <>
       <ul className="space-y-3">
+        {packs.map((pack) => (
+          <PackLine key={`pack-${pack.id}`} pack={pack} />
+        ))}
         {assets.map((asset) => (
-          <CartLine key={asset.id} asset={asset} />
+          <CartLine key={`asset-${asset.id}`} asset={asset} />
         ))}
       </ul>
 
@@ -237,12 +251,6 @@ function Content({
   )
 }
 
-// CartLine: linha de um item no carrinho. Click no thumb/título leva
-// pro detalhe; click no ✗ remove via CartContext.toggle.
-//
-// memo: prop `asset` é referência estável (vem do array que mudou só
-// no fetch ou no toggle). Outros re-renders do pai (loading,
-// checkingOut, total) não precisam cascatear aqui.
 const CartLine = memo(function CartLine({ asset }: { asset: Asset }) {
   const { toggle } = useCart()
 
@@ -250,8 +258,7 @@ const CartLine = memo(function CartLine({ asset }: { asset: Asset }) {
     try {
       await toggle(asset.id)
     } catch {
-      // CartButton/toast já trata; aqui é silent porque toggle
-      // reverte o optimistic update sozinho.
+      // toggle reverte o optimistic update sozinho.
     }
   }
 
@@ -302,9 +309,74 @@ const CartLine = memo(function CartLine({ asset }: { asset: Asset }) {
   )
 })
 
-// TotalCard: bloco fixo no fim da lista com o total e o botão
-// finalizar compra. Pixel-art destaque (bg-twilight) pra ele ser
-// a CTA principal da página.
+// PackLine: linha de um pack no carrinho. Mostra contagem de items
+// + preço do bundle. Click no título leva pro /pack/:id. Visualmente
+// diferenciado (border-arcane) pra distinguir de assets soltos.
+const PackLine = memo(function PackLine({ pack }: { pack: Pack }) {
+  const { togglePack } = useCart()
+  async function handleRemove() {
+    try {
+      await togglePack(pack.id)
+    } catch {
+      // togglePack reverte sozinho.
+    }
+  }
+
+  // Fallback de thumb pra primeiro item se pack não tem própria.
+  const thumb =
+    pack.thumbnail_path ?? pack.items?.[0]?.thumbnail_path ?? null
+
+  const itemCount = pack.items_count ?? pack.items?.length ?? 0
+
+  return (
+    <li className="bg-parchment border-4 border-arcane shadow-pixel p-3 flex items-center gap-3">
+      <Link to={`/pack/${pack.id}`} className="flex-shrink-0">
+        {thumb ? (
+          <img
+            src={fileUrl(thumb)}
+            alt={pack.title}
+            className="w-16 h-16 object-cover border-2 border-ink shadow-pixel-sm"
+          />
+        ) : (
+          <div className="w-16 h-16 bg-arcane/20 border-2 border-ink shadow-pixel-sm flex items-center justify-center font-bold text-xs">
+            PACK
+          </div>
+        )}
+      </Link>
+      <div className="flex-1 min-w-0">
+        <span className="text-[10px] uppercase tracking-widest text-arcane font-bold">
+          ◆ Pack
+        </span>
+        <Link
+          to={`/pack/${pack.id}`}
+          className="block font-bold text-sm uppercase tracking-wider truncate hover:text-arcane"
+          title={pack.title}
+        >
+          {pack.title}
+        </Link>
+        <p className="text-xs text-ink/70 tracking-wider truncate">
+          {itemCount} {itemCount === 1 ? 'asset' : 'assets'} ·{' '}
+          <span className="font-bold">
+            {pack.author_name ?? 'anônimo'}
+          </span>
+        </p>
+      </div>
+      <div className="flex flex-col items-end gap-1 flex-shrink-0">
+        <p className="text-sm font-bold">✦ {formatPrice(pack.price_cents)}</p>
+        <button
+          type="button"
+          onClick={handleRemove}
+          aria-label="Remover pack do carrinho"
+          title="Remover pack"
+          className="text-[10px] uppercase tracking-widest font-bold underline underline-offset-4 decoration-2 hover:text-arcane"
+        >
+          ✗ Remover
+        </button>
+      </div>
+    </li>
+  )
+})
+
 function TotalCard({
   totalCents,
   onCheckout,

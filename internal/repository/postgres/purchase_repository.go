@@ -24,30 +24,44 @@ func NewPurchaseRepository(db *pgxpool.Pool) *PurchaseRepository {
 	return &PurchaseRepository{db: db}
 }
 
-// Checkout abre uma checkout_session e cria as purchases em estado
-// 'pending'. O fluxo de pagamento real (provider redirect + webhook)
-// confirma depois via ConfirmSession — só aí as compras viram 'paid'.
+// purchaseIntent é o "que vai virar purchase" depois da expansão do
+// carrinho. assets soltos viram 1 intent direto; packs viram N intents
+// (1 por item, exceto os que o user já tem 'paid').
 //
-// Numa única transação:
+// fromPackID é nil pra compras diretas, e o ID do pack pra items
+// originados de pack — frontend usa esse campo pra mostrar "comprado
+// via pack X" na biblioteca.
+type purchaseIntent struct {
+	assetID     int64
+	priceCents  int64 // snapshot já calculado (asset.price OU pack_price/N)
+	fromPackID  *int64
+}
+
+// Checkout abre uma checkout_session com base no carrinho do user.
+// Suporta carrinho misto (assets soltos + packs). Pra cada entrada:
 //
-//  1. SELECT FOR UPDATE OF a do JOIN cart_items + assets — congela
-//     preço enquanto a sessão é montada.
-//  2. ErrCartEmpty se carrinho vazio.
-//  3. Defense-in-depth: ErrSelfPurchase se algum asset for do próprio
-//     usuário (ownership pode ter mudado entre Add e Checkout).
-//  4. ErrAlreadyPurchased se já existe purchase 'paid' do mesmo asset
-//     (UNIQUE parcial filtra status='paid' — pendings antigas não
-//     bloqueiam, mas paid bloqueia).
-//  5. INSERT checkout_sessions (status='pending', total=sum dos preços).
-//  6. INSERT N purchases (status='pending', vinculadas à sessão).
-//  7. DELETE cart_items — o carrinho é esvaziado mesmo antes do pago.
-//     Justificativa: provider real abre página em outra aba, usuário
-//     pode fechar; manter o carrinho cheio levaria a duplicidade.
+//	asset solto → 1 purchase pending, snapshot = preço atual do asset
+//	pack        → N purchases (1 por item) MINUS items que o user já tem
+//	              'paid' em qualquer compra anterior; preço total = preço
+//	              do pack (sempre), distribuído proporcionalmente entre
+//	              os items efetivamente comprados (último absorve o resto
+//	              da divisão pra somar exato).
 //
-// Em qualquer falha, ROLLBACK — sem sessão órfã, sem purchase órfã.
+// Tudo em transação:
+//  1. SELECT FOR UPDATE cart_items + JOINs pra travar assets/packs.
+//  2. Valida não-vazio + self-purchase em assets e packs.
+//  3. Expande packs pra purchaseIntent[] descartando items já 'paid'.
+//  4. Se TODOS os items de TODOS os packs já foram comprados E não há
+//     assets soltos, ErrCartEmpty (nada a comprar) — refunda o user
+//     mentalmente sem criar sessão fantasma.
+//  5. INSERT session com TotalCents = soma dos prices reais cobrados
+//     (assets soltos + pack_price cheio dos packs que ainda têm pelo
+//     menos 1 item a comprar).
+//  6. INSERT N purchases (status='pending', with from_pack_id quando
+//     aplicável).
+//  7. DELETE cart_items do user.
 //
-// Devolve a sessão (com IDs dos purchases pendentes) que o frontend
-// usa pra "redirecionar" o cliente pro stub do provedor.
+// ErrSelfPurchase / ErrAlreadyPurchased mantidos do flow original.
 func (r *PurchaseRepository) Checkout(ctx context.Context, userID int64) (*domain.CheckoutSession, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -55,49 +69,14 @@ func (r *PurchaseRepository) Checkout(ctx context.Context, userID int64) (*domai
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	type cartLine struct {
-		assetID    int64
-		priceCents int64
-		ownerID    int64
-	}
-
-	const selectQ = `
-		SELECT c.asset_id, a.price_cents, a.owner_id
-		  FROM cart_items c
-		  JOIN assets a ON a.id = c.asset_id
-		 WHERE c.user_id = $1
-		 FOR UPDATE OF a`
-
-	rows, err := tx.Query(ctx, selectQ, userID)
+	intents, total, err := buildCheckoutIntents(ctx, tx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("select cart for checkout: %w", err)
+		return nil, err
 	}
-	lines := make([]cartLine, 0)
-	var total int64
-	for rows.Next() {
-		var l cartLine
-		if err := rows.Scan(&l.assetID, &l.priceCents, &l.ownerID); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("scan cart for checkout: %w", err)
-		}
-		lines = append(lines, l)
-		total += l.priceCents
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate cart for checkout: %w", err)
-	}
-
-	if len(lines) == 0 {
+	if len(intents) == 0 {
 		return nil, domain.ErrCartEmpty
 	}
-	for _, l := range lines {
-		if l.ownerID == userID {
-			return nil, domain.ErrSelfPurchase
-		}
-	}
 
-	// Cria a sessão primeiro pra ter o ID que vai vincular as purchases.
 	session := &domain.CheckoutSession{}
 	const insertSessionQ = `
 		INSERT INTO checkout_sessions (user_id, total_cents)
@@ -112,13 +91,16 @@ func (r *PurchaseRepository) Checkout(ctx context.Context, userID int64) (*domai
 	}
 
 	const insertPurchaseQ = `
-		INSERT INTO purchases (user_id, asset_id, price_cents_snapshot, status, checkout_session_id)
-		VALUES ($1, $2, $3, 'pending', $4)
+		INSERT INTO purchases (user_id, asset_id, price_cents_snapshot, status, checkout_session_id, from_pack_id)
+		VALUES ($1, $2, $3, 'pending', $4, $5)
 		RETURNING id`
-	purchaseIDs := make([]int64, 0, len(lines))
-	for _, l := range lines {
+	purchaseIDs := make([]int64, 0, len(intents))
+	for _, in := range intents {
 		var pid int64
-		if err := tx.QueryRow(ctx, insertPurchaseQ, userID, l.assetID, l.priceCents, session.ID).Scan(&pid); err != nil {
+		if err := tx.QueryRow(
+			ctx, insertPurchaseQ,
+			userID, in.assetID, in.priceCents, session.ID, in.fromPackID,
+		).Scan(&pid); err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
 				return nil, domain.ErrAlreadyPurchased
@@ -138,6 +120,184 @@ func (r *PurchaseRepository) Checkout(ctx context.Context, userID int64) (*domai
 
 	session.PurchaseIDs = purchaseIDs
 	return session, nil
+}
+
+// buildCheckoutIntents enumera o carrinho (assets soltos + packs),
+// expande packs, dedupe contra purchases pagas e devolve as intents +
+// total a cobrar. Faz todos os SELECTs FOR UPDATE pra serializar com
+// outros checkouts concorrentes do mesmo user.
+func buildCheckoutIntents(ctx context.Context, tx pgx.Tx, userID int64) ([]purchaseIntent, int64, error) {
+	// 1) assets soltos no carrinho — lock pelo lado do asset.
+	const assetQ = `
+		SELECT a.id, a.price_cents, a.owner_id
+		  FROM cart_items c
+		  JOIN assets a ON a.id = c.asset_id
+		 WHERE c.user_id = $1 AND c.asset_id IS NOT NULL
+		 FOR UPDATE OF a`
+	type cartAsset struct {
+		id, price, owner int64
+	}
+	assetRows, err := tx.Query(ctx, assetQ, userID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("select cart assets for checkout: %w", err)
+	}
+	cartAssets := make([]cartAsset, 0)
+	for assetRows.Next() {
+		var ca cartAsset
+		if err := assetRows.Scan(&ca.id, &ca.price, &ca.owner); err != nil {
+			assetRows.Close()
+			return nil, 0, fmt.Errorf("scan cart asset: %w", err)
+		}
+		if ca.owner == userID {
+			assetRows.Close()
+			return nil, 0, domain.ErrSelfPurchase
+		}
+		cartAssets = append(cartAssets, ca)
+	}
+	assetRows.Close()
+	if err := assetRows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate cart assets: %w", err)
+	}
+
+	// 2) packs no carrinho — lock pelo lado do pack.
+	const packQ = `
+		SELECT p.id, p.price_cents, p.owner_id
+		  FROM cart_items c
+		  JOIN packs p ON p.id = c.pack_id
+		 WHERE c.user_id = $1 AND c.pack_id IS NOT NULL
+		 FOR UPDATE OF p`
+	type cartPack struct {
+		id, price, owner int64
+	}
+	packRows, err := tx.Query(ctx, packQ, userID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("select cart packs for checkout: %w", err)
+	}
+	cartPacks := make([]cartPack, 0)
+	for packRows.Next() {
+		var cp cartPack
+		if err := packRows.Scan(&cp.id, &cp.price, &cp.owner); err != nil {
+			packRows.Close()
+			return nil, 0, fmt.Errorf("scan cart pack: %w", err)
+		}
+		if cp.owner == userID {
+			packRows.Close()
+			return nil, 0, domain.ErrSelfPurchase
+		}
+		cartPacks = append(cartPacks, cp)
+	}
+	packRows.Close()
+	if err := packRows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate cart packs: %w", err)
+	}
+
+	// 3) Compras pagas anteriormente — usado pra dedupe (assets que
+	// vêm via pack mas já são do user).
+	owned, err := loadOwnedAssetIDs(ctx, tx, userID)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	intents := make([]purchaseIntent, 0)
+	var total int64
+
+	for _, ca := range cartAssets {
+		if _, has := owned[ca.id]; has {
+			// Asset solto que já foi comprado — rejeita. Defesa: a UNIQUE
+			// parcial em purchases pegaria depois (ErrAlreadyPurchased),
+			// mas erramos cedo pra retornar antes de criar a sessão.
+			return nil, 0, domain.ErrAlreadyPurchased
+		}
+		intents = append(intents, purchaseIntent{
+			assetID:    ca.id,
+			priceCents: ca.price,
+		})
+		total += ca.price
+	}
+
+	for _, cp := range cartPacks {
+		items, err := loadPackItemIDs(ctx, tx, cp.id)
+		if err != nil {
+			return nil, 0, err
+		}
+		// Filtra items que o user já tem 'paid'.
+		toBuy := make([]int64, 0, len(items))
+		for _, aid := range items {
+			if _, has := owned[aid]; !has {
+				toBuy = append(toBuy, aid)
+			}
+		}
+		if len(toBuy) == 0 {
+			// Todos do pack já são do user — pack não gera nenhuma
+			// purchase nova; também NÃO cobramos pelo pack (faria o
+			// user pagar por nada).
+			continue
+		}
+		// Preço cheio do pack, distribuído entre os items efetivamente
+		// comprados. Último item absorve o resto da divisão pra que a
+		// soma dos snapshots == pack price exato.
+		base := cp.price / int64(len(toBuy))
+		remainder := cp.price - base*int64(len(toBuy))
+		for i, aid := range toBuy {
+			snap := base
+			if i == len(toBuy)-1 {
+				snap += remainder
+			}
+			// Captura cp.id em variável local pra que &packID aponte pra
+			// memória estável (não pro loop var compartilhada).
+			packID := cp.id
+			intents = append(intents, purchaseIntent{
+				assetID:    aid,
+				priceCents: snap,
+				fromPackID: &packID,
+			})
+		}
+		total += cp.price
+	}
+
+	return intents, total, nil
+}
+
+// loadOwnedAssetIDs devolve o set de asset IDs que o user já tem em
+// purchases 'paid'. Usado pra dedupe na expansão dos packs.
+func loadOwnedAssetIDs(ctx context.Context, tx pgx.Tx, userID int64) (map[int64]struct{}, error) {
+	const q = `
+		SELECT asset_id FROM purchases
+		 WHERE user_id = $1 AND status = 'paid' AND asset_id IS NOT NULL`
+	rows, err := tx.Query(ctx, q, userID)
+	if err != nil {
+		return nil, fmt.Errorf("load owned assets: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[int64]struct{})
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan owned asset: %w", err)
+		}
+		out[id] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
+// loadPackItemIDs devolve os asset IDs que compõem o pack, ordenados
+// por position. Usado na expansão do pack durante checkout.
+func loadPackItemIDs(ctx context.Context, tx pgx.Tx, packID int64) ([]int64, error) {
+	const q = `SELECT asset_id FROM pack_items WHERE pack_id = $1 ORDER BY position, asset_id`
+	rows, err := tx.Query(ctx, q, packID)
+	if err != nil {
+		return nil, fmt.Errorf("load pack item ids: %w", err)
+	}
+	defer rows.Close()
+	out := make([]int64, 0)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan pack item id: %w", err)
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // FindSession devolve uma sessão pelo ID, conferindo ownership. Se a

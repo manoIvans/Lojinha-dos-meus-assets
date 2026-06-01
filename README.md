@@ -1,6 +1,6 @@
 # ManoMesh
 
-Marketplace de assets 3D com estética pixel-art / RPG retrô. Catálogo público, perfis com avatar, favoritos, carrinho + checkout em duas etapas (sessão `pending` → confirm `paid`, idempotente; pronto pra plugar Stripe/MercadoPago no lugar do stub), biblioteca de compras, avaliações com estrelas, notificações in-app, dashboard analítico do vendedor, viewer 3D interativo e filtros multi-facet.
+Marketplace de assets 3D com estética pixel-art / RPG retrô. Catálogo público, perfis com avatar, favoritos, carrinho + checkout em duas etapas (sessão `pending` → confirm `paid`, idempotente; pronto pra plugar Stripe/MercadoPago no lugar do stub), packs (vendedor agrupa N assets próprios num bundle com preço próprio), biblioteca de compras, avaliações com estrelas, notificações in-app, dashboard analítico do vendedor, viewer 3D interativo e filtros multi-facet.
 
 > Repo no GitHub: `manoIvans/ManoMesh`. Go module: `github.com/manoIvans/manomesh`.
 
@@ -38,11 +38,14 @@ Marketplace de assets 3D com estética pixel-art / RPG retrô. Catálogo públic
 - Editar/deletar pelo `OwnerPanel` no `/asset/:id`
 - Trocar thumbnail/modelo independentemente dos metadados (rotas multipart separadas)
 - "Minha Loja" (`/my-store`): grid dos próprios assets
+- **Packs** (bundles): agrupar 2-50 assets próprios num único item à venda com preço próprio (desconto vs soma individual). Thumbnail opcional (fallback pro 1º item). Items são SEMPRE assets do mesmo dono — validado no repo via `SELECT FOR UPDATE` que previne race com mudança de ownership. Carrinho misto (assets + packs), checkout expande pack em N purchases com **dedupe** dos assets que o comprador já tem 'paid' (cobra preço cheio mesmo assim — política "compra só os faltantes, preço cheio"). Cada purchase recebe `from_pack_id` pra rastrear origem.
 - **Dashboard analítico** em `/my-store`: total de vendas, receita, compradores únicos, asset mais vendido e tabela de últimas vendas (com link pro perfil do comprador)
 
 ### Comércio
 - Favoritos (`/favoritos`) — coração no card e detalhe, optimistic update
-- Carrinho (`/carrinho`) — adicionar/remover, total, checkout em duas etapas: clica "Finalizar" → cria sessão `pending` + redirect pra `/checkout/:id` (página stub que simula Stripe/MP) → "Pagar" confirma idempotente e leva pra `/library`
+- Carrinho misto (`/carrinho`) — assets soltos + packs na mesma lista. Total/checkout em duas etapas: clica "Finalizar" → cria sessão `pending` + redirect pra `/checkout/:id` (página stub que simula Stripe/MP) → "Pagar" confirma idempotente e leva pra `/library`
+- Catálogo de packs em `/packs` (paginado, 24/página) + detalhe em `/pack/:id` com grid dos assets inclusos
+- Vendedor cria pack em `/dashboard/packs/new`: form multi-select dos próprios assets + título/preço + capa opcional
 - Biblioteca (`/library`) — histórico de compras com link de download do modelo
 
 ### Avaliações
@@ -90,7 +93,7 @@ Marketplace de assets 3D com estética pixel-art / RPG retrô. Catálogo públic
 │     ├─ styles/pixel.ts     # PIXEL_BTN, PIXEL_INPUT, ASSET_GRID_CLASSES
 │     ├─ pages/              # 1 arquivo por rota
 │     └─ App.tsx             # Routes
-├─ migrations/               # 012 arquivos SQL, ordem importante
+├─ migrations/               # 014 arquivos SQL, ordem importante
 ├─ uploads/                  # bind mount: thumbnails/, models/, avatars/
 ├─ Dockerfile                # multi-stage build da API
 ├─ docker-compose.yml        # Postgres + API
@@ -148,15 +151,16 @@ cd frontend && npm run build  # produção
 
 ## Testes
 
-**Backend**: 64 testes de handler + 20 nos pacotes `auth` e `migrate` = **84 testes Go**. Handler tests em [internal/transport/http/handler/*_test.go](internal/transport/http/handler/) cobrem caminhos felizes + mapeamento de erro sentinel (404/403/409/410) + side-effects importantes (cleanup de arquivos no delete, hooks de notificação no confirm de pagamento, idempotência do confirm). Não tocam no banco — usam mocks das interfaces (`fakeUserRepo`, `fakeAssetRepo`, `fakeNotificationSink`, `fakePurchaseRepo`, etc.) definidos em [testhelpers_test.go](internal/transport/http/handler/testhelpers_test.go).
+**Backend**: 106 testes de handler + 20 nos pacotes `auth` e `migrate` = **126 testes Go**. Handler tests em [internal/transport/http/handler/*_test.go](internal/transport/http/handler/) cobrem caminhos felizes + mapeamento de erro sentinel (404/403/409/410/413/415) + side-effects importantes (cleanup de arquivos no delete/rollback, hooks de notificação no confirm de pagamento, idempotência do confirm). Não tocam no banco — usam mocks das interfaces (`fakeUserRepo`, `fakeAssetRepo`, `fakeNotificationSink`, `fakePurchaseRepo`, `fakeFileStorage`, etc.) definidos em [testhelpers_test.go](internal/transport/http/handler/testhelpers_test.go).
 
-Padrão dos mocks: cada interface tem um struct fake com campos `XxxFn func(...)`. Se o teste **não configura** uma função e ela é chamada, panic — esquecimento de mock vira falha óbvia em vez de nil pointer no fundo. Notification sink captura chamadas (`SoldAssetsCalls`, `BuyerPurchasesCalls`, `ForReviewCalls`) pra que testes verifiquem hooks dispararam (ou não) com args corretos.
+Padrão dos mocks: cada interface tem um struct fake com campos `XxxFn func(...)`. Se o teste **não configura** uma função e ela é chamada, panic — esquecimento de mock vira falha óbvia em vez de nil pointer no fundo. Notification sink captura chamadas (`SoldAssetsCalls`, `BuyerPurchasesCalls`, `ForReviewCalls`) pra que testes verifiquem hooks dispararam (ou não) com args corretos. Tests de multipart usam helpers `doMultipart` / `doMultipartWithRepeats` (último suporta campos repetidos como `tags=a&tags=b`).
 
 Cobertura por handler:
 - **Auth** (7+): register sucesso + conflitos email/username + validação; login com bcrypt real + mensagem anti-enumeration
-- **Asset** (13+): GetByID, Update, Delete (com cleanup), Similar (cap), Trending, Tags, MyAssets; List dual-mode (legado vs `?page=`)
-- **User** (10+): GetMe, GetByUsername (regression check: PublicUser não vaza email), UpdateMe, List (legado + `?page=` + cap de `page_size`)
-- **Cart + Checkout** (10+): Add (self-purchase), Checkout cria sessão `pending` (não dispara notifs), GetCheckoutSession, ConfirmSession dispara notifs, **confirm idempotente NÃO refire notifs**, sessão expirada (410)
+- **Asset** (24+): GetByID, Update, Delete (com cleanup), Similar (cap), Trending, Tags, MyAssets; List dual-mode (legado vs `?page=`); **Create multipart** (sucesso + faltando thumb + rollback quando model falha + tipo inválido + tags vazias + DB falha → ambos arquivos limpos); **ReplaceThumbnail/ReplaceModel** (sucesso + remove antigo, DB falha → rollback do novo, 403/404, campo faltando)
+- **User** (17+): GetMe, GetByUsername (regression check: PublicUser não vaza email), UpdateMe, List (legado + `?page=` + cap de `page_size`); **UploadAvatar** (sucesso + remove antigo, primeira vez sem remoção, campo faltando, tipo inválido, DB falha → rollback); **DeleteAvatar** (remove antigo, idempotente sem avatar prévio)
+- **Cart + Checkout** (15+): Add asset (self-purchase), AddPack/RemovePack (404/409), Checkout cria sessão `pending` (não dispara notifs), GetCheckoutSession, ConfirmSession dispara notifs, **confirm idempotente NÃO refire notifs**, sessão expirada (410), List devolve shape misto `{assets, packs}`
+- **Pack** (18): Create multipart (com/sem thumb, < 2 items, asset_ids inválido, ErrPackInvalidItems faz cleanup), GetByID, List paginado, MyPacks (filtra por JWT), Update (200/403/404/binding), Delete (cleanup do thumb, 403), ReplaceThumbnail (sucesso + rollback do novo se DB falha)
 - **Favorite** (5): Add/Remove idempotentes, List/ListIDs
 - **Review** (4 cases + 3 subtestes): Create exige compra, conflito UNIQUE, rating fora de 1-5
 - **Notification** (3): List, UnreadCount (formato `{count}`), MarkAllRead
@@ -166,8 +170,7 @@ Pra rodar verboso: `go test ./internal/transport/http/handler/ -v`.
 **Frontend**: 51 testes vitest em [frontend/src/**/__tests__/](frontend/src/) — helpers de `lib/`, `auth/tokenStorage`, validações. Roda com `npm test -- --run`.
 
 Não cobertos por ora (escopo maior):
-- Repository tests (precisam Postgres via testcontainers-go ou DSN de teste)
-- Upload multipart (Create do asset, avatar upload, replaceThumbnail/replaceModel) — setup do request multipart é trabalhoso
+- Repository tests (precisam Postgres via testcontainers-go ou DSN de teste) — testes de handler usam mocks das interfaces, então o SQL real fica não-coberto
 
 ---
 
@@ -227,15 +230,26 @@ Todas as rotas em `/api/v1/*`. Health check em `/ping`. Uploads servidos em `/up
 - `GET /my/favorite-ids` — `{ids: int[]}`
 
 ### Carrinho + compras (protegido)
-- `POST /assets/:id/cart` · `DELETE /assets/:id/cart`
-- `GET /my/cart` · `DELETE /my/cart` (clear)
-- `GET /my/cart-ids` — `{ids: int[]}`
-- `POST /my/cart/checkout` — abre uma **CheckoutSession** `pending` (provider stub), cria as `purchases` em `status='pending'` e esvazia o carrinho. Retorna a sessão completa (`{id, status, total_cents, expires_at, purchase_ids[]}`). NÃO dispara notificações ainda.
+- `POST /assets/:id/cart` · `DELETE /assets/:id/cart` — asset solto
+- `POST /packs/:id/cart` · `DELETE /packs/:id/cart` — pack inteiro (vira N purchases no checkout)
+- `GET /my/cart` — **shape misto**: `{assets: Asset[], packs: Pack[]}`
+- `DELETE /my/cart` — esvazia tudo (assets+packs)
+- `GET /my/cart-ids` — `{asset_ids: int[], pack_ids: int[]}` (hidrata `isInCart`/`isPackInCart` em N cards)
+- `POST /my/cart/checkout` — abre uma **CheckoutSession** `pending` (provider stub), expande packs em N purchases (dedupe contra `status='paid'` do user; pack inteiro cobrado mesmo se user já tem alguns assets do pack, snapshot proporcional entre items efetivamente comprados), cria as `purchases` em `status='pending'` e esvazia o carrinho. Retorna a sessão completa (`{id, status, total_cents, expires_at, purchase_ids[]}`). NÃO dispara notificações ainda.
 - `GET /my/checkout/sessions/:id` — detalhe da sessão (usado pelo stub do gateway no frontend).
 - `POST /my/checkout/sessions/:id/confirm` — marca a sessão e suas purchases como `paid`. **Idempotente** (webhooks reais podem retry). Aqui dispara `asset_sold` + `purchase_confirmation`. Erros: `404` (não encontrada), `410` (expirada, >30min), `409` (estado inválido / asset comprado em outra sessão).
 - `GET /my/library` — `Purchase[]` apenas `status='paid'` (pending/failed não aparecem; asset null quando vendedor deletou)
 - `GET /my/library-ids` — `{ids: int[]}`
 - `GET /my/store/stats` — dashboard: `{total_sales, revenue_cents, unique_buyers, top_asset, recent_sales}`
+
+### Packs (bundles de assets)
+- `GET /packs` (público) — listagem paginada `{items, page, page_size, total}` (default `page_size=20`, cap 100). Cada item inclui `items_count` (subquery), sem aninhar os assets pra evitar N+1
+- `GET /packs/:id` (público) — detalhe com `items: Asset[]` aninhados (JOIN em pack_items+assets, ordenado por `position`)
+- `POST /packs` (protegido) — multipart: `title`, `description`, `price_cents`, `asset_ids[]` (2-50 únicos, todos do mesmo dono), `thumbnail` (opcional)
+- `PUT /packs/:id` (protegido) — JSON `{title, description, price_cents, asset_ids[]}` (substitui items por completo)
+- `PUT /packs/:id/thumbnail` (protegido) — multipart `thumbnail` (troca arquivo, faz rollback se DB falha)
+- `DELETE /packs/:id` (protegido) — cleanup do thumb no disco; items CASCADE pelo schema
+- `GET /my/packs` (protegido) — packs do JWT, sem paginação
 
 ### Reviews (protegido)
 - `POST /assets/:id/reviews` — body `{rating 1-5, comment}`. Requer compra prévia (403 sem). Hook notifica dono.
@@ -277,6 +291,8 @@ Sequenciais, idempotentes (`IF NOT EXISTS`). Schema atual:
 | 010 | `notifications(user_id, type, asset_id, actor_user_id, read_at)` com CHECK enum (`asset_sold`/`asset_reviewed`) + index parcial WHERE read_at IS NULL pra UnreadCount rápido |
 | 011 | Amplia CHECK do `notifications.type` pra incluir `purchase_confirmation` (notifica o comprador além do vendedor) |
 | 012 | `checkout_sessions(id UUID, user_id, status pending/paid/failed/expired, provider, total_cents, expires_at, paid_at)` + `purchases.status` + `purchases.checkout_session_id`; UNIQUE parcial em purchases passa a filtrar `status='paid'` (pendings concorrentes pro mesmo asset coexistem; só pagas bloqueiam) |
+| 013 | `packs(id, owner_id, title, description, price_cents, thumbnail_path?, timestamps)` + `pack_items(pack_id, asset_id, position)` PK composta com CASCADE em ambas FKs. Validações de "min 2 items" e "todos do mesmo owner" ficam em app (PackRepository com `SELECT FOR UPDATE`) |
+| 014 | `cart_items` aceita asset_id OU pack_id (XOR via CHECK), surrogate `id BIGSERIAL` substitui PK composta, UNIQUEs parciais por target. `purchases.from_pack_id` (FK SET NULL pra preservar histórico se pack for deletado) |
 
 ---
 
@@ -322,8 +338,8 @@ curl -s http://localhost:8080/api/v1/assets | head
 
 ## Roadmap (não implementado)
 
-- Tests de repository com Postgres real (testcontainers-go) + tests de upload multipart
-- Tests do frontend (vitest pros helpers em `lib/` e sortAssets/parseSort da Gallery)
+- Tests de repository com Postgres real (testcontainers-go) — handler tests cobrem multipart (incluindo cleanup/rollback de arquivos) e sentinel mapping, mas SQL real fica no escopo de integration tests
+- Packs Fase 3 (opcional): edição inline de packs no `/dashboard`, AssetDetail mostrar "também faz parte do pack X", Library agrupando purchases por `from_pack_id`
 - Integração de gateway real (Stripe/MercadoPago). O fluxo já tem a estrutura de sessão + confirm idempotente; basta trocar o stub do `Checkout.tsx` pelo redirect externo e o `ConfirmCheckoutSession` pelo webhook do provedor.
 - Paginação no `Gallery` (hoje só os endpoints e o `Creators` usam; a galeria mantém filtro client-side)
 - Rename do diretório do repo `Lojinha-dos-meus-assets/` (cosmético — o módulo Go já é `manomesh`)
